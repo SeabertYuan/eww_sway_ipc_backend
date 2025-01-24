@@ -44,8 +44,10 @@ pub fn stojson_list(input: &str) -> Result<Vec<JsonObj>, JsonError> {
             '}' => {
                 stack.pop();
                 json_obj_string.push(c);
-                json_obj_strings.push(json_obj_string.clone());
-                json_obj_string.clear(); // capacity?
+                if stack.len() < 2 {
+                    json_obj_strings.push(json_obj_string.clone());
+                    json_obj_string.clear(); // capacity?
+                }
             }
             ',' => {
                 // don't push json object separating commas
@@ -242,7 +244,7 @@ mod test {
 ]
 ");
         let output: Vec<JsonObj> = stojson_list(&input).unwrap();
-        assert_eq!(output.len(), 3);
+        assert_eq!(3, output.len());
     }
     #[test]
     fn parses_json_obj_real() {
