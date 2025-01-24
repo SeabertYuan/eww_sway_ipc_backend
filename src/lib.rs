@@ -1,3 +1,5 @@
+pub mod json_parser;
+
 pub fn run() {
     println!("ran");
 }
