@@ -24,6 +24,13 @@ pub enum JsonValue {
     Null,
     None,
 }
+
+pub enum JsonEntry {
+    Object(JsonObj),
+    Array(Vec<JsonEntry>),
+    Pair(JsonKVPair),
+}
+
 pub struct JsonKVPair {
     key: String,
     value: JsonValue,
@@ -32,7 +39,7 @@ pub struct JsonKVPair {
 pub type JsonObj = Vec<JsonKVPair>;
 
 // TODO replace all input[] with get to stop panicking
-pub fn stojson_list(input: &str) -> Result<Vec<JsonObj>, JsonError> {
+pub fn stojson_list(input: &str) -> Result<JsonEntry, JsonError> {
     if input[0..1] != *"[" {
         return Err(JsonError::StringToJsonListError);
     }
@@ -70,29 +77,29 @@ pub fn stojson_list(input: &str) -> Result<Vec<JsonObj>, JsonError> {
             break;
         }
     }
-    let output: Vec<Result<JsonObj, JsonError>> = json_obj_strings
+    let output: Result<Vec<JsonEntry>, JsonError> = json_obj_strings
         .iter()
         .map(|json_str| stojson(json_str))
         .collect();
 
-    output.into_iter().collect()
+    Ok(JsonEntry::Array(output?))
 }
 
-pub fn stojson(input: &str) -> Result<JsonObj, JsonError> {
-    /*
-       match c {
-        '{' => handle_json_obj(),
-        '[' => handle_json_list(),
-        '"' => handle_json_value(),
-        'n' => handleNull(),
-        't' => handleTrue(),
-        'f' => handleFalse(),
-        '_' => JsonError::StringToJsonError,
+pub fn stojson(input: &str) -> Result<JsonEntry, JsonError> {
+    match input.as_bytes().get(0) {
+        Some(c) => match c {
+            b'{' => {
+                // remove first and last char
+                input.chars().next();
+                input.chars().next_back();
+                Ok(JsonEntry::Object(handle_json_obj(input)?))
+            }
+            b'[' => Ok(stojson_list(input)?),
+            b'"' => Ok(JsonEntry::Pair(handle_json_kvpair(input)?)),
+            _ => Err(JsonError::StringToJsonError),
+        },
+        None => Err(JsonError::StringToJsonError),
     }
-    Ok(vec![JsonKVPair {
-        key: String::new(),
-        value: JsonValue::Number(1f64),
-    }]) */
 }
 
 // creates a list of key:value pairs
@@ -135,6 +142,7 @@ fn handle_json_string(input: &str) -> Result<usize, JsonError> {
     };
 }
 
+// !!! TODO deal with objects.
 // handles values
 fn handle_json_value(input: &str) -> Result<JsonValue, JsonError> {
     return match input.as_bytes()[0] {
@@ -362,8 +370,11 @@ mod test {
   }
 ]
 ");
-        let output: Vec<JsonObj> = stojson_list(&input).unwrap();
-        assert_eq!(3, output.len());
+        if let JsonEntry::Array(arr) = stojson_list(&input).unwrap() {
+            assert_eq!(3, arr.len());
+        } else {
+            panic!("ruh roh this was supposed to be an array!");
+        }
     }
     #[test]
     fn parses_json_obj_real() {
@@ -418,12 +429,15 @@ mod test {
     \"focused\": false,
     \"visible\": false
   }";
-        let output: JsonObj = stojson(input).unwrap();
-        assert_eq!("id", output[0].key);
-        if let JsonValue::Number(n) = output[0].value {
-            assert_eq!(4f64, n);
+        if let JsonEntry::Object(obj) = stojson(input).unwrap() {
+            assert_eq!("id", obj[0].key);
+            if let JsonValue::Number(n) = obj[0].value {
+                assert_eq!(4f64, n);
+            } else {
+                panic!("test failed");
+            };
         } else {
-            panic!("test failed");
-        };
+            panic!("ruh roh was not an object!");
+        }
     }
 }
