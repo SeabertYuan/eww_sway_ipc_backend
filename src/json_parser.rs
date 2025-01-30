@@ -6,6 +6,7 @@ use std::fmt;
 pub enum JsonError {
     StringToJsonError,
     StringToJsonListError,
+    InvalidSyntaxError,
 }
 impl fmt::Display for JsonError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -16,9 +17,12 @@ impl Error for JsonError {}
 
 pub enum JsonValue {
     String(String),
+    Boolean(bool),
     Number(f64),
     List(Vec<JsonObj>),
     Obj(JsonObj),
+    Null,
+    None,
 }
 pub struct JsonKVPair {
     key: String,
@@ -27,6 +31,7 @@ pub struct JsonKVPair {
 
 pub type JsonObj = Vec<JsonKVPair>;
 
+// TODO replace all input[] with get to stop panicking
 pub fn stojson_list(input: &str) -> Result<Vec<JsonObj>, JsonError> {
     if input[0..1] != *"[" {
         return Err(JsonError::StringToJsonListError);
@@ -74,10 +79,123 @@ pub fn stojson_list(input: &str) -> Result<Vec<JsonObj>, JsonError> {
 }
 
 pub fn stojson(input: &str) -> Result<JsonObj, JsonError> {
+    /*
+       match c {
+        '{' => handle_json_obj(),
+        '[' => handle_json_list(),
+        '"' => handle_json_value(),
+        'n' => handleNull(),
+        't' => handleTrue(),
+        'f' => handleFalse(),
+        '_' => JsonError::StringToJsonError,
+    }
     Ok(vec![JsonKVPair {
         key: String::new(),
         value: JsonValue::Number(1f64),
-    }])
+    }]) */
+}
+
+// creates a list of key:value pairs
+fn handle_json_obj(input: &str) -> Result<JsonObj, JsonError> {
+    let mut result: JsonObj = vec![];
+    match input.as_bytes()[0] {
+        b' ' | b'\t' | b'\n' | b'\r' => match input.get(1..) {
+            Some(x) => {
+                result.append(&mut handle_json_obj(x)?);
+            }
+            None => return Err(JsonError::InvalidSyntaxError),
+        },
+        b'"' => result.push(handle_json_kvpair(&input)?),
+        _ => return Err(JsonError::InvalidSyntaxError),
+    }
+    return Ok(result);
+}
+
+// creates a key:value pair
+fn handle_json_kvpair(input: &str) -> Result<JsonKVPair, JsonError> {
+    let mut result: JsonKVPair = JsonKVPair {
+        key: String::new(),
+        value: JsonValue::None,
+    };
+    let key_end: usize = handle_json_string(&input[1..])?;
+    result.key.push_str(&input[1..key_end]);
+    result.value = handle_json_value(&input)?;
+    return Ok(result);
+}
+
+// returns the index where the last " is in a json string
+fn handle_json_string(input: &str) -> Result<usize, JsonError> {
+    return match input.as_bytes()[0] {
+        b'\\' => {
+            Ok(0)
+            // !!!TODO determine if valid escape
+        }
+        b'"' => Ok(1),
+        _ => Ok(1 + handle_json_string(&input[1..])?),
+    };
+}
+
+// !!!TODO
+// handles values
+fn handle_json_value(input: &str) -> Result<JsonValue, JsonError> {
+    return match input.as_bytes()[0] {
+        b'"' => {
+            // turn json string into a JsonValue
+            let mut string_value: String = String::new();
+            string_value.push_str(&input[1..handle_json_string(&input[1..])?]);
+
+            Ok(JsonValue::String(string_value))
+        }
+        b'n' => {
+            let value: Option<&str> = input.get(0..4);
+            return match value {
+                Some(x) => {
+                    return match x {
+                        //handle null
+                        "null" => Ok(JsonValue::Null),
+                        _ => Err(JsonError::InvalidSyntaxError),
+                    };
+                }
+                None => Err(JsonError::InvalidSyntaxError),
+            };
+        }
+        b't' => {
+            let value: Option<&str> = input.get(0..4);
+            return match value {
+                Some(x) => {
+                    return match x {
+                        "true" => Ok(JsonValue::Boolean(true)),
+                        _ => Err(JsonError::InvalidSyntaxError),
+                    }
+                }
+                None => Err(JsonError::InvalidSyntaxError),
+            };
+        } //handle true
+        b'f' => {
+            //handle false
+            let value: Option<&str> = input.get(0..4);
+            return match value {
+                Some(x) => {
+                    return match x {
+                        "true" => Ok(JsonValue::Boolean(false)),
+                        _ => Err(JsonError::InvalidSyntaxError),
+                    }
+                }
+                None => Err(JsonError::InvalidSyntaxError),
+            };
+        }
+        b' ' | b'\t' | b'\n' | b'\r' => Ok(handle_json_value(&input[1..])?),
+        _ => Ok(handle_json_num(&input[1..])?),
+    };
+}
+
+fn handle_json_num(input: &str) -> Result<usize, JsonError> {
+    // loop forward until a whitespace or any tab, newline, return
+    return match input.as_bytes()[0] {
+        b'0'..b'9' | b'.' => Ok(1 + handle_json_num(&input[1..])?),
+        b',' | b'\t' | b'\r' | b'\n' | b' ' => Ok(1),
+        _ => Err(JsonError::InvalidSyntaxError),
+    };
 }
 
 #[cfg(test)]
