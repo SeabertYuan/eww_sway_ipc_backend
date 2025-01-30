@@ -135,7 +135,6 @@ fn handle_json_string(input: &str) -> Result<usize, JsonError> {
     };
 }
 
-// !!!TODO
 // handles values
 fn handle_json_value(input: &str) -> Result<JsonValue, JsonError> {
     return match input.as_bytes()[0] {
@@ -185,7 +184,9 @@ fn handle_json_value(input: &str) -> Result<JsonValue, JsonError> {
             };
         }
         b' ' | b'\t' | b'\n' | b'\r' => Ok(handle_json_value(&input[1..])?),
-        _ => Ok(handle_json_num(&input[1..])?),
+        _ => Ok(JsonValue::Number(
+            input[0..handle_json_num(&input[1..])?].parse().unwrap(),
+        )),
     };
 }
 
