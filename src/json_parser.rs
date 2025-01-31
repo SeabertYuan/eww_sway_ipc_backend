@@ -20,7 +20,7 @@ pub enum JsonValue {
     Boolean(bool),
     Number(f64),
     List(Vec<JsonObj>),
-    Obj(JsonObj),
+    Object(JsonObj),
     Null,
     None,
 }
@@ -106,13 +106,14 @@ pub fn stojson(input: &str) -> Result<JsonEntry, JsonError> {
 fn handle_json_obj(input: &str) -> Result<JsonObj, JsonError> {
     let mut result: JsonObj = vec![];
     match input.as_bytes()[0] {
-        b' ' | b'\t' | b'\n' | b'\r' => match input.get(1..) {
+        b' ' | b'\t' | b'\n' | b'\r' | b',' => match input.get(1..) {
             Some(x) => {
                 result.append(&mut handle_json_obj(x)?);
             }
             None => return Err(JsonError::InvalidSyntaxError),
         },
         b'"' => result.push(handle_json_kvpair(&input)?),
+        b'}' => return Ok(result),
         _ => return Err(JsonError::InvalidSyntaxError),
     }
     return Ok(result);
@@ -192,6 +193,7 @@ fn handle_json_value(input: &str) -> Result<JsonValue, JsonError> {
             };
         }
         b' ' | b'\t' | b'\n' | b'\r' => Ok(handle_json_value(&input[1..])?),
+        b'{' => Ok(JsonValue::Object(handle_json_obj(&input[1..])?)),
         _ => Ok(JsonValue::Number(
             input[0..handle_json_num(&input[1..])?].parse().unwrap(),
         )),
