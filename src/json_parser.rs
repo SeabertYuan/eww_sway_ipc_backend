@@ -38,6 +38,7 @@ pub struct JsonKVPair {
 
 pub type JsonObj = Vec<JsonKVPair>;
 
+// !!! TODO json lists might just be arrays of values
 // TODO replace all input[] with get to stop panicking
 pub fn stojson_list(input: &str) -> Result<JsonEntry, JsonError> {
     if input[0..1] != *"[" {
@@ -85,6 +86,7 @@ pub fn stojson_list(input: &str) -> Result<JsonEntry, JsonError> {
     Ok(JsonEntry::Array(output?))
 }
 
+// Parses a json string in the format {..}
 pub fn stojson(input: &str) -> Result<JsonEntry, JsonError> {
     match input.as_bytes().get(0) {
         Some(c) => match c {
@@ -127,7 +129,22 @@ fn handle_json_kvpair(input: &str) -> Result<JsonKVPair, JsonError> {
     };
     let key_end: usize = handle_json_string(&input[1..])?;
     result.key.push_str(&input[1..key_end]);
-    result.value = handle_json_value(&input)?;
+    let val_start: usize = find_value_start(&input[key_end + 1..])? + 1;
+    result.value = handle_json_value(&input[val_start..])?;
+    return Ok(result);
+}
+
+// Returns the index of the : separator
+fn find_value_start(input: &str) -> Result<usize, JsonError> {
+    let mut result: usize = 0;
+    for byte in input.as_bytes() {
+        result += 1;
+        match byte {
+            b':' => break,
+            b' ' | b'\r' | b'\n' | b'\t' => {}
+            _ => return Err(JsonError::InvalidSyntaxError),
+        }
+    }
     return Ok(result);
 }
 
@@ -215,6 +232,20 @@ mod test {
 
     #[test]
     fn parses_json_list_simple() {
+        let input: String = String::from("[{\"key\":\"value\"}]");
+        if let JsonEntry::Array(arr) = stojson_list(&input).unwrap() {
+            assert_eq!(arr.len(), 1);
+            if let JsonEntry::Object(obj) = &arr[0] {
+                assert_eq!(&obj[0].key, "key");
+                if let JsonValue::String(s) = &obj[0].value {
+                    assert_eq!(s, "value");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parses_json_list_real() {
         // A common output for Sway ipc get_workspaces
         let input: String = String::from("[
   {
@@ -378,6 +409,18 @@ mod test {
             panic!("ruh roh this was supposed to be an array!");
         }
     }
+
+    #[test]
+    fn parses_json_obj_simple() {
+        let input: String = String::from("{\"key\":\"value\"}");
+        if let JsonEntry::Object(output) = stojson(&input).unwrap() {
+            assert_eq!(output[0].key, "key");
+            if let JsonValue::String(s) = &output[0].value {
+                assert_eq!(s, "value");
+            }
+        }
+    }
+
     #[test]
     fn parses_json_obj_real() {
         let input: &str = "{
