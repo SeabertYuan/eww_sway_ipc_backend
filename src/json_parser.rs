@@ -91,6 +91,7 @@ pub fn stojson_list(input: &str) -> Result<JsonEntry, JsonError> {
     Ok(JsonEntry::Array(output?))
 }
 
+// TODO handle a json obj with multiple entries
 // Parses a json string in the format {..}
 pub fn stojson(input: &str) -> Result<JsonEntry, JsonError> {
     match input.as_bytes().get(0) {
@@ -113,20 +114,19 @@ pub fn stojson(input: &str) -> Result<JsonEntry, JsonError> {
 fn handle_json_obj(input: &str) -> Result<JsonObj, JsonError> {
     let mut result: JsonObj = vec![];
     match input.as_bytes().get(0) {
-        Some(b) => {
-            println!("{b}");
-            match b {
-                b' ' | b'\t' | b'\n' | b'\r' | b',' => match input.get(1..) {
-                    Some(x) => {
-                        result.append(&mut handle_json_obj(x)?);
-                    }
-                    None => return Err(JsonError::RanOutOfCharsError),
-                },
-                b'"' => result.push(handle_json_kvpair(&input)?),
-                b'}' => return Ok(result),
-                _ => return Err(JsonError::InvalidTypeError),
-            }
-        }
+        Some(b) => match b {
+            b' ' | b'\t' | b'\n' | b'\r' | b',' => match input.get(1..) {
+                Some(next_input) => {
+                    let output = &mut handle_json_obj(next_input)?;
+                    println!("appending: {:?}", output);
+                    result.append(output);
+                }
+                None => return Err(JsonError::RanOutOfCharsError),
+            },
+            b'"' => result.push(handle_json_kvpair(&input)?),
+            b'}' => return Ok(result),
+            _ => return Err(JsonError::InvalidTypeError),
+        },
         None => return Err(JsonError::RanOutOfCharsError),
     }
     return Ok(result);
@@ -658,6 +658,35 @@ mod test {
                 assert_eq!(s, "value");
             }
         }
+
+        let whitespaces = "{        \"key\"    : \"value\"                              }";
+        if let JsonEntry::Object(output) = stojson(whitespaces).unwrap() {
+            assert_eq!(output[0].key, "key");
+            if let JsonValue::String(s) = &output[0].value {
+                assert_eq!(s, "value");
+            }
+        }
+    }
+
+    #[test]
+    fn parses_json_obj_less_simple() {
+        let input = "{\"key1\":\"value\",\"key2\":2,\"key3\":null,\"monke\":true}";
+        if let JsonEntry::Object(output) = stojson(input).unwrap() {
+            assert_eq!(output[0].key, "key1");
+            assert_eq!(output[1].key, "key2");
+            assert_eq!(output[2].key, "key3");
+            assert_eq!(output[3].key, "monke");
+            if let JsonValue::String(s) = &output[0].value {
+                assert_eq!(s, "value");
+            }
+            if let JsonValue::Number(n) = output[1].value {
+                assert_eq!(n, 2f64);
+            }
+            assert!(matches!(output[2].value, JsonValue::Null));
+            if let JsonValue::Boolean(b) = &output[3].value {
+                assert!(b);
+            }
+        }
     }
 
     #[test]
@@ -717,6 +746,13 @@ mod test {
             assert_eq!("id", obj[0].key);
             if let JsonValue::Number(n) = obj[0].value {
                 assert_eq!(4f64, n);
+            } else {
+                panic!("test failed");
+            };
+            assert_eq!("deco_rect", obj[10].key);
+            if let JsonValue::Object(o) = &obj[10].value {
+                assert_eq!(o[0].key, "x");
+                assert_eq!(o[3].key, "height");
             } else {
                 panic!("test failed");
             };
