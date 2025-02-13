@@ -106,16 +106,22 @@ pub fn stojson(input: Rc<RefCell<String>>) -> Result<JsonEntry, JsonError> {
             return Err(JsonError::RanOutOfCharsError);
         };
     }
+    println!(
+        "turning string to json with first char: {}",
+        first_input_char
+    );
     match first_input_char {
         b'{' => {
             // remove first and last char
             // TODO error handle chars
             {
                 let mut input_borrow = input.borrow_mut();
-                input_borrow.chars().next();
-                input_borrow.chars().next_back();
-                *input_borrow = input_borrow.as_str()[1..].to_string();
+                //input_borrow.chars().next();
+                //input_borrow.chars().next_back();
+                *input_borrow =
+                    input_borrow.as_str()[1..input_borrow.as_str().len() - 1].to_string();
             }
+            //println!("peeling braces to yield: {}", input.borrow());
             Ok(JsonEntry::Object(handle_json_obj(Rc::clone(&input))?))
         }
         b'[' => Ok(stojson_list(Rc::clone(&input))?),
@@ -156,21 +162,28 @@ fn handle_json_obj(input: Rc<RefCell<String>>) -> Result<JsonObj, JsonError> {
 // creates a key:value pair from "k" .. : .. v
 fn handle_json_kvpair(input: Rc<RefCell<String>>) -> Result<JsonKVPair, JsonError> {
     println!("handling KV pair");
-    let input_borrow = input.borrow();
+    let key_end: usize;
     let mut result: JsonKVPair = JsonKVPair {
         key: String::new(),
         value: JsonValue::None,
     };
-    let key_end: usize = handle_json_string(&input_borrow[1..])?;
-    println!("pushing {}", &input_borrow[1..key_end]);
-    result.key.push_str(&input_borrow[1..key_end]);
+    {
+        let input_borrow = input.borrow();
+        key_end = handle_json_string(&input_borrow[1..])?;
+        println!("pushing {}", &input_borrow[1..key_end]);
+        result.key.push_str(&input_borrow[1..key_end]);
+    }
     // key_end is the ending index, but we want to remove that and the :
     {
         let mut input_borrow = input.borrow_mut();
         *input_borrow = input_borrow[key_end + 1..].to_string();
     }
-    let val_start: usize = key_end + find_value_start(&input_borrow)? + 2;
-    println!("checking for value in: {}", &input_borrow[val_start..]);
+    let val_start: usize;
+    {
+        let input_borrow = input.borrow();
+        val_start = key_end + find_value_start(&input_borrow)? + 2;
+        println!("checking for value in: {}", &input_borrow[val_start..]);
+    }
     {
         let mut input_borrow = input.borrow_mut();
         *input_borrow = input_borrow[val_start..].to_string();
@@ -235,11 +248,11 @@ fn handle_json_value(input: Rc<RefCell<String>>) -> Result<JsonValue, JsonError>
             Ok(JsonValue::String(string_value))
         }
         b'n' | b't' => {
-            let next_input_chars: Box<str>;
+            let next_input_chars: String;
             {
                 let input_borrow = input.borrow();
                 if let Some(str) = input_borrow.get(0..4) {
-                    next_input_chars = Box::new(str);
+                    next_input_chars = str.to_string();
                 } else {
                     return Err(JsonError::RanOutOfCharsError);
                 };
@@ -248,7 +261,7 @@ fn handle_json_value(input: Rc<RefCell<String>>) -> Result<JsonValue, JsonError>
                 let mut input_borrow = input.borrow_mut();
                 *input_borrow = input_borrow[4..].to_string();
             }
-            return match next_input_chars {
+            return match next_input_chars.as_str() {
                 //handle null
                 "null" => Ok(JsonValue::Null),
                 "true" => Ok(JsonValue::Boolean(true)),
@@ -256,17 +269,17 @@ fn handle_json_value(input: Rc<RefCell<String>>) -> Result<JsonValue, JsonError>
             };
         }
         b'f' => {
-            let next_input_chars: &str;
+            let next_input_chars: String;
             {
                 let input_borrow = input.borrow();
                 if let Some(c) = input_borrow.as_str().get(0..5) {
-                    next_input_chars = c.clone();
+                    next_input_chars = c.to_string();
                 } else {
                     return Err(JsonError::RanOutOfCharsError);
                 };
             }
             //handle false
-            return match next_input_chars {
+            return match next_input_chars.as_str() {
                 "false" => {
                     {
                         let mut input_borrow = input.borrow_mut();
