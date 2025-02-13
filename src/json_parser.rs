@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
+use std::rc::Rc;
 
 // TODO investigate error types later
 #[derive(Debug)]
@@ -45,14 +47,15 @@ pub type JsonObj = Vec<JsonKVPair>;
 
 // !!! TODO json lists might just be arrays of values
 // TODO replace all input[] with get to stop panicking
-pub fn stojson_list(input: &str) -> Result<JsonEntry, JsonError> {
-    if input[0..1] != *"[" {
+pub fn stojson_list(input: Rc<RefCell<String>>) -> Result<JsonEntry, JsonError> {
+    let input_borrow = input.borrow();
+    if input_borrow[0..1] != *"[" {
         return Err(JsonError::StringToJsonListError);
     }
     let mut stack: Vec<char> = vec![];
     let mut json_obj_strings: Vec<String> = vec![];
     let mut json_obj_string: String = String::new();
-    for c in input.chars() {
+    for c in input_borrow.chars() {
         match c {
             '[' => stack.push(c),
             '{' => {
@@ -85,7 +88,7 @@ pub fn stojson_list(input: &str) -> Result<JsonEntry, JsonError> {
     }
     let output: Result<Vec<JsonEntry>, JsonError> = json_obj_strings
         .iter()
-        .map(|json_str| stojson(json_str))
+        .map(|json_str| stojson(Rc::new(RefCell::new(json_str.to_string()))))
         .collect();
 
     Ok(JsonEntry::Array(output?))
@@ -93,17 +96,19 @@ pub fn stojson_list(input: &str) -> Result<JsonEntry, JsonError> {
 
 // TODO handle a json obj with multiple entries
 // Parses a json string in the format {..}
-pub fn stojson(input: &str) -> Result<JsonEntry, JsonError> {
-    match input.as_bytes().get(0) {
+pub fn stojson(input: Rc<RefCell<String>>) -> Result<JsonEntry, JsonError> {
+    let mut input_borrow = input.borrow_mut();
+    match input_borrow.as_bytes().get(0) {
         Some(c) => match c {
             b'{' => {
                 // remove first and last char
-                input.chars().next();
-                input.chars().next_back();
-                Ok(JsonEntry::Object(handle_json_obj(&input[1..])?))
+                input_borrow.chars().next();
+                input_borrow.chars().next_back();
+                *input_borrow = input_borrow.as_str()[1..].to_string();
+                Ok(JsonEntry::Object(handle_json_obj(Rc::clone(&input))?))
             }
-            b'[' => Ok(stojson_list(input)?),
-            b'"' => Ok(JsonEntry::Pair(handle_json_kvpair(input)?)),
+            b'[' => Ok(stojson_list(Rc::clone(&input))?),
+            b'"' => Ok(JsonEntry::Pair(handle_json_kvpair(Rc::clone(&input))?)),
             _ => Err(JsonError::StringToJsonError),
         },
         None => Err(JsonError::StringToJsonError),
@@ -111,19 +116,21 @@ pub fn stojson(input: &str) -> Result<JsonEntry, JsonError> {
 }
 
 // takes in a potential json object with { peeled off (the object should look like ..}) creates a list of key:value pairs
-fn handle_json_obj(input: &str) -> Result<JsonObj, JsonError> {
+fn handle_json_obj(input: Rc<RefCell<String>>) -> Result<JsonObj, JsonError> {
+    let mut input_borrow = input.borrow_mut();
     let mut result: JsonObj = vec![];
-    match input.as_bytes().get(0) {
+    match input_borrow.as_bytes().get(0) {
         Some(b) => match b {
-            b' ' | b'\t' | b'\n' | b'\r' | b',' => match input.get(1..) {
-                Some(next_input) => {
-                    let output = &mut handle_json_obj(next_input)?;
+            b' ' | b'\t' | b'\n' | b'\r' | b',' => match input_borrow.as_bytes().get(0) {
+                Some(_next_input) => {
+                    *input_borrow = input_borrow.as_str()[1..].to_string();
+                    let output = &mut handle_json_obj(Rc::clone(&input))?;
                     println!("appending: {:?}", output);
                     result.append(output);
                 }
                 None => return Err(JsonError::RanOutOfCharsError),
             },
-            b'"' => result.push(handle_json_kvpair(&input)?),
+            b'"' => result.push(handle_json_kvpair(Rc::clone(&input))?),
             b'}' => return Ok(result),
             _ => return Err(JsonError::InvalidTypeError),
         },
@@ -133,19 +140,22 @@ fn handle_json_obj(input: &str) -> Result<JsonObj, JsonError> {
 }
 
 // creates a key:value pair from "k" .. : .. v
-fn handle_json_kvpair(input: &str) -> Result<JsonKVPair, JsonError> {
+fn handle_json_kvpair(input: Rc<RefCell<String>>) -> Result<JsonKVPair, JsonError> {
     println!("handling KV pair");
+    let mut input_borrow = input.borrow_mut();
     let mut result: JsonKVPair = JsonKVPair {
         key: String::new(),
         value: JsonValue::None,
     };
-    let key_end: usize = handle_json_string(&input[1..])?;
-    println!("pushing {}", &input[1..key_end]);
-    result.key.push_str(&input[1..key_end]);
+    let key_end: usize = handle_json_string(&input_borrow[1..])?;
+    println!("pushing {}", &input_borrow[1..key_end]);
+    result.key.push_str(&input_borrow[1..key_end]);
     // key_end is the ending index, but we want to remove that and the :
-    let val_start: usize = key_end + find_value_start(&input[key_end + 1..])? + 2;
-    println!("checking for value in: {}", &input[val_start..]);
-    result.value = handle_json_value(&input[val_start..])?;
+    *input_borrow = input_borrow[key_end + 1..].to_string();
+    let val_start: usize = key_end + find_value_start(&input_borrow)? + 2;
+    println!("checking for value in: {}", &input_borrow[val_start..]);
+    *input_borrow = input_borrow[val_start..].to_string();
+    result.value = handle_json_value(Rc::clone(&input))?;
     return Ok(result);
 }
 
@@ -181,23 +191,28 @@ fn handle_json_string(input: &str) -> Result<usize, JsonError> {
 
 // handles values in the format wv.. where w is any whitespace, v is the value and any remaining
 // json strings that occur after
-fn handle_json_value(input: &str) -> Result<JsonValue, JsonError> {
+fn handle_json_value(input: Rc<RefCell<String>>) -> Result<JsonValue, JsonError> {
+    let input_borrow = input.borrow_mut();
     return match input.as_bytes().get(0) {
         Some(b) => match b {
             b'"' => {
                 // turn json string into a JsonValue
                 let mut string_value: String = String::new();
-                string_value.push_str(&input[1..handle_json_string(&input[1..])?]);
+                *input_borrow = input_borrow[1..].to_string();
+                string_value.push_str(&input_borrow[..handle_json_string(&input_borrow)?]);
 
                 Ok(JsonValue::String(string_value))
             }
             b'n' => {
-                let value: Option<&str> = input.get(0..4);
+                let value: Option<&str> = input_borrow.get(0..4);
                 return match value {
                     Some(x) => {
                         return match x {
                             //handle null
-                            "null" => Ok(JsonValue::Null),
+                            "null" => {
+                                *input_borrow = input_borrow[4..].to_string();
+                                Ok(JsonValue::Null)
+                            }
                             _ => Err(JsonError::InvalidTypeError),
                         };
                     }
@@ -205,11 +220,14 @@ fn handle_json_value(input: &str) -> Result<JsonValue, JsonError> {
                 };
             }
             b't' => {
-                let value: Option<&str> = input.get(0..4);
+                let value: Option<&str> = input_borrow.get(0..4);
                 return match value {
                     Some(x) => {
                         return match x {
-                            "true" => Ok(JsonValue::Boolean(true)),
+                            "true" => {
+                                *input_borrow = input_borrow[4..].to_string();
+                                Ok(JsonValue::Boolean(true))
+                            }
                             _ => Err(JsonError::InvalidTypeError),
                         }
                     }
@@ -218,21 +236,33 @@ fn handle_json_value(input: &str) -> Result<JsonValue, JsonError> {
             } //handle true
             b'f' => {
                 //handle false
-                let value: Option<&str> = input.get(0..5);
+                let value: Option<&str> = input_borrow.get(0..5);
                 return match value {
                     Some(x) => {
                         return match x {
-                            "false" => Ok(JsonValue::Boolean(false)),
+                            "false" => {
+                                *input_borrow = input_borrow[5..].to_string();
+                                Ok(JsonValue::Boolean(false))
+                            }
                             _ => Err(JsonError::InvalidTypeError),
                         }
                     }
                     None => Err(JsonError::RanOutOfCharsError),
                 };
             }
-            b' ' | b'\t' | b'\n' | b'\r' => Ok(handle_json_value(&input[1..])?),
-            b'{' => Ok(JsonValue::Object(handle_json_obj(&input[1..])?)),
+            b' ' | b'\t' | b'\n' | b'\r' => {
+                *input_borrow = input_borrow[1..].to_string();
+                Ok(handle_json_value(Rc::clone(&input))?)
+            }
+            b'{' => {
+                *input_borrow = input_borrow[1..].to_string();
+                Ok(JsonValue::Object(handle_json_obj(Rc::clone(&input))?))
+            }
             _ => {
-                if let Ok(n) = input[0..handle_json_num(&input[1..])?].parse::<f64>() {
+                // TODO exponents might be allowed ie. 1e10.
+                if let Ok(n) = input_borrow[0..handle_json_num(&input_borrow[1..])?].parse::<f64>()
+                {
+                    *input_borrow = input_borrow[1..].to_string();
                     Ok(JsonValue::Number(n))
                 } else {
                     Err(JsonError::InvalidNumberError)
@@ -426,53 +456,72 @@ mod test {
 
     #[test]
     fn handle_json_kv_pair_functions() {
-        let basic_string = "\"key\":\"value\"";
-        let basic_int = "\"int\":7}";
-        let basic_float = "\"float\":4.7}";
-        let basic_null = "\"null\":null";
-        let basic_true = "\"true\":true";
-        let basic_false = "\"false\":false";
-        assert_eq!(handle_json_kvpair(basic_string).unwrap().key, "key");
-        if let JsonValue::String(s) = handle_json_kvpair(basic_string).unwrap().value {
+        let basic_string = Rc::new(RefCell::new(String::from("\"key\":\"value\"")));
+        let basic_int = Rc::new(RefCell::new(String::from("\"int\":7}")));
+        let basic_float = Rc::new(RefCell::new(String::from("\"float\":4.7}")));
+        let basic_null = Rc::new(RefCell::new(String::from("\"null\":null")));
+        let basic_true = Rc::new(RefCell::new(String::from("\"true\":true")));
+        let basic_false = Rc::new(RefCell::new(String::from("\"false\":false")));
+        assert_eq!(
+            handle_json_kvpair(Rc::clone(&basic_string)).unwrap().key,
+            "key"
+        );
+        if let JsonValue::String(s) = handle_json_kvpair(Rc::clone(&basic_string)).unwrap().value {
             assert_eq!(s, "value");
         } else {
             panic!("value should have been string");
         }
-        assert_eq!(handle_json_kvpair(basic_int).unwrap().key, "int");
-        if let JsonValue::Number(n) = handle_json_kvpair(basic_int).unwrap().value {
+        assert_eq!(
+            handle_json_kvpair(Rc::clone(&basic_int)).unwrap().key,
+            "int"
+        );
+        if let JsonValue::Number(n) = handle_json_kvpair(Rc::clone(&basic_int)).unwrap().value {
             assert_eq!(n, 7f64);
         } else {
             panic!("value should have been int");
         }
-        assert_eq!(handle_json_kvpair(basic_float).unwrap().key, "float");
-        if let JsonValue::Number(n) = handle_json_kvpair(basic_float).unwrap().value {
+        assert_eq!(
+            handle_json_kvpair(Rc::clone(&basic_float)).unwrap().key,
+            "float"
+        );
+        if let JsonValue::Number(n) = handle_json_kvpair(Rc::clone(&basic_float)).unwrap().value {
             assert_eq!(n, 4.7f64);
         } else {
             panic!("value should have been float");
         }
-        assert_eq!(handle_json_kvpair(basic_true).unwrap().key, "true");
-        if let JsonValue::Boolean(b) = handle_json_kvpair(basic_true).unwrap().value {
+        assert_eq!(
+            handle_json_kvpair(Rc::clone(&basic_true)).unwrap().key,
+            "true"
+        );
+        if let JsonValue::Boolean(b) = handle_json_kvpair(Rc::clone(&basic_true)).unwrap().value {
             assert_eq!(b, true);
         } else {
             panic!("value should have been true");
         }
-        assert_eq!(handle_json_kvpair(basic_false).unwrap().key, "false");
-        if let JsonValue::Boolean(b) = handle_json_kvpair(basic_false).unwrap().value {
+        assert_eq!(
+            handle_json_kvpair(Rc::clone(&basic_false)).unwrap().key,
+            "false"
+        );
+        if let JsonValue::Boolean(b) = handle_json_kvpair(Rc::clone(&basic_false)).unwrap().value {
             assert_eq!(b, false);
         } else {
             panic!("value should have been false");
         }
-        assert_eq!(handle_json_kvpair(basic_null).unwrap().key, "null");
+        assert_eq!(
+            handle_json_kvpair(Rc::clone(&basic_null)).unwrap().key,
+            "null"
+        );
         assert!(matches!(
-            handle_json_kvpair(basic_null).unwrap().value,
+            handle_json_kvpair(Rc::clone(&basic_null)).unwrap().value,
             JsonValue::Null
         ));
     }
 
     #[test]
     fn parses_json_list_simple() {
-        let input: String = String::from("[{\"key\":\"value\"}]");
-        if let JsonEntry::Array(arr) = stojson_list(&input).unwrap() {
+        let input: Rc<RefCell<String>> =
+            Rc::new(RefCell::new(String::from("[{\"key\":\"value\"}]")));
+        if let JsonEntry::Array(arr) = stojson_list(Rc::clone(&input)).unwrap() {
             assert_eq!(arr.len(), 1);
             if let JsonEntry::Object(obj) = &arr[0] {
                 assert_eq!(&obj[0].key, "key");
@@ -486,7 +535,7 @@ mod test {
     #[test]
     fn parses_json_list_real() {
         // A common output for Sway ipc get_workspaces
-        let input: String = String::from("[
+        let input = Rc::new(RefCell::new(String::from("[
   {
     \"id\": 4,
     \"type\": \"workspace\",
@@ -641,8 +690,8 @@ mod test {
     \"visible\": false
   }
 ]
-");
-        if let JsonEntry::Array(arr) = stojson_list(&input).unwrap() {
+")));
+        if let JsonEntry::Array(arr) = stojson_list(Rc::clone(&input)).unwrap() {
             assert_eq!(3, arr.len());
         } else {
             panic!("ruh roh this was supposed to be an array!");
@@ -651,16 +700,18 @@ mod test {
 
     #[test]
     fn parses_json_obj_simple() {
-        let input: String = String::from("{\"key\":\"value\"}");
-        if let JsonEntry::Object(output) = stojson(&input).unwrap() {
+        let input = Rc::new(RefCell::new(String::from("{\"key\":\"value\"}")));
+        if let JsonEntry::Object(output) = stojson(Rc::clone(&input)).unwrap() {
             assert_eq!(output[0].key, "key");
             if let JsonValue::String(s) = &output[0].value {
                 assert_eq!(s, "value");
             }
         }
 
-        let whitespaces = "{        \"key\"    : \"value\"                              }";
-        if let JsonEntry::Object(output) = stojson(whitespaces).unwrap() {
+        let whitespaces = Rc::new(RefCell::new(String::from(
+            "{        \"key\"    : \"value\"                              }",
+        )));
+        if let JsonEntry::Object(output) = stojson(Rc::clone(&whitespaces)).unwrap() {
             assert_eq!(output[0].key, "key");
             if let JsonValue::String(s) = &output[0].value {
                 assert_eq!(s, "value");
@@ -670,7 +721,9 @@ mod test {
 
     #[test]
     fn parses_json_obj_less_simple() {
-        let input = "{\"key1\":\"value\",\"key2\":2,\"key3\":null,\"monke\":true}";
+        let input = Rc::new(RefCell::new(String::from(
+            "{\"key1\":\"value\",\"key2\":2,\"key3\":null,\"monke\":true}",
+        )));
         if let JsonEntry::Object(output) = stojson(input).unwrap() {
             assert_eq!(output[0].key, "key1");
             assert_eq!(output[1].key, "key2");
@@ -691,7 +744,8 @@ mod test {
 
     #[test]
     fn parses_json_obj_real() {
-        let input: &str = "{
+        let input = Rc::new(RefCell::new(String::from(
+            "{
     \"id\": 4,
     \"type\": \"workspace\",
     \"orientation\": \"horizontal\",
@@ -741,7 +795,8 @@ mod test {
     \"representation\": \"H[firefox]\",
     \"focused\": false,
     \"visible\": false
-  }";
+  }",
+        )));
         if let JsonEntry::Object(obj) = stojson(input).unwrap() {
             assert_eq!("id", obj[0].key);
             if let JsonValue::Number(n) = obj[0].value {
