@@ -97,44 +97,58 @@ pub fn stojson_list(input: Rc<RefCell<String>>) -> Result<JsonEntry, JsonError> 
 // TODO handle a json obj with multiple entries
 // Parses a json string in the format {..}
 pub fn stojson(input: Rc<RefCell<String>>) -> Result<JsonEntry, JsonError> {
-    let mut input_borrow = input.borrow_mut();
-    match input_borrow.as_bytes().get(0) {
-        Some(c) => match c {
-            b'{' => {
-                // remove first and last char
+    let first_input_char: u8;
+    {
+        let input_borrow = input.borrow();
+        if let Some(c) = input_borrow.as_bytes().get(0) {
+            first_input_char = c.clone();
+        } else {
+            return Err(JsonError::RanOutOfCharsError);
+        };
+    }
+    match first_input_char {
+        b'{' => {
+            // remove first and last char
+            // TODO error handle chars
+            {
+                let mut input_borrow = input.borrow_mut();
                 input_borrow.chars().next();
                 input_borrow.chars().next_back();
                 *input_borrow = input_borrow.as_str()[1..].to_string();
-                Ok(JsonEntry::Object(handle_json_obj(Rc::clone(&input))?))
             }
-            b'[' => Ok(stojson_list(Rc::clone(&input))?),
-            b'"' => Ok(JsonEntry::Pair(handle_json_kvpair(Rc::clone(&input))?)),
-            _ => Err(JsonError::StringToJsonError),
-        },
-        None => Err(JsonError::StringToJsonError),
+            Ok(JsonEntry::Object(handle_json_obj(Rc::clone(&input))?))
+        }
+        b'[' => Ok(stojson_list(Rc::clone(&input))?),
+        b'"' => Ok(JsonEntry::Pair(handle_json_kvpair(Rc::clone(&input))?)),
+        _ => Err(JsonError::StringToJsonError),
     }
 }
 
-// takes in a potential json object with { peeled off (the object should look like ..}) creates a list of key:value pairs
+// takes in a potential json object with { peeled off (the object should look like '..}' ) creates a list of key:value pairs
 fn handle_json_obj(input: Rc<RefCell<String>>) -> Result<JsonObj, JsonError> {
-    let mut input_borrow = input.borrow_mut();
+    let first_input_char: u8;
+    {
+        let input_borrow = input.borrow();
+        if let Some(c) = input_borrow.as_bytes().get(0) {
+            first_input_char = c.clone();
+        } else {
+            return Err(JsonError::RanOutOfCharsError);
+        };
+    }
+    {
+        let mut input_borrow = input.borrow_mut();
+        *input_borrow = input_borrow.as_str()[1..].to_string();
+    }
     let mut result: JsonObj = vec![];
-    match input_borrow.as_bytes().get(0) {
-        Some(b) => match b {
-            b' ' | b'\t' | b'\n' | b'\r' | b',' => match input_borrow.as_bytes().get(0) {
-                Some(_next_input) => {
-                    *input_borrow = input_borrow.as_str()[1..].to_string();
-                    let output = &mut handle_json_obj(Rc::clone(&input))?;
-                    println!("appending: {:?}", output);
-                    result.append(output);
-                }
-                None => return Err(JsonError::RanOutOfCharsError),
-            },
-            b'"' => result.push(handle_json_kvpair(Rc::clone(&input))?),
-            b'}' => return Ok(result),
-            _ => return Err(JsonError::InvalidTypeError),
-        },
-        None => return Err(JsonError::RanOutOfCharsError),
+    match first_input_char {
+        b' ' | b'\t' | b'\n' | b'\r' | b',' => {
+            let output = &mut handle_json_obj(Rc::clone(&input))?;
+            println!("appending: {:?}", output);
+            result.append(output);
+        }
+        b'"' => result.push(handle_json_kvpair(Rc::clone(&input))?),
+        b'}' => return Ok(result),
+        _ => return Err(JsonError::InvalidTypeError),
     }
     return Ok(result);
 }
@@ -142,7 +156,7 @@ fn handle_json_obj(input: Rc<RefCell<String>>) -> Result<JsonObj, JsonError> {
 // creates a key:value pair from "k" .. : .. v
 fn handle_json_kvpair(input: Rc<RefCell<String>>) -> Result<JsonKVPair, JsonError> {
     println!("handling KV pair");
-    let mut input_borrow = input.borrow_mut();
+    let input_borrow = input.borrow();
     let mut result: JsonKVPair = JsonKVPair {
         key: String::new(),
         value: JsonValue::None,
@@ -151,10 +165,16 @@ fn handle_json_kvpair(input: Rc<RefCell<String>>) -> Result<JsonKVPair, JsonErro
     println!("pushing {}", &input_borrow[1..key_end]);
     result.key.push_str(&input_borrow[1..key_end]);
     // key_end is the ending index, but we want to remove that and the :
-    *input_borrow = input_borrow[key_end + 1..].to_string();
+    {
+        let mut input_borrow = input.borrow_mut();
+        *input_borrow = input_borrow[key_end + 1..].to_string();
+    }
     let val_start: usize = key_end + find_value_start(&input_borrow)? + 2;
     println!("checking for value in: {}", &input_borrow[val_start..]);
-    *input_borrow = input_borrow[val_start..].to_string();
+    {
+        let mut input_borrow = input.borrow_mut();
+        *input_borrow = input_borrow[val_start..].to_string();
+    }
     result.value = handle_json_value(Rc::clone(&input))?;
     return Ok(result);
 }
@@ -192,84 +212,102 @@ fn handle_json_string(input: &str) -> Result<usize, JsonError> {
 // handles values in the format wv.. where w is any whitespace, v is the value and any remaining
 // json strings that occur after
 fn handle_json_value(input: Rc<RefCell<String>>) -> Result<JsonValue, JsonError> {
-    let input_borrow = input.borrow_mut();
-    return match input.as_bytes().get(0) {
-        Some(b) => match b {
-            b'"' => {
-                // turn json string into a JsonValue
-                let mut string_value: String = String::new();
+    let first_input_char: u8;
+    {
+        let input_borrow = input.borrow();
+        if let Some(c) = input_borrow.as_bytes().get(0) {
+            first_input_char = c.clone();
+        } else {
+            return Err(JsonError::RanOutOfCharsError);
+        };
+    }
+    return match first_input_char {
+        b'"' => {
+            // turn json string into a JsonValue
+            let mut string_value: String = String::new();
+            {
+                let mut input_borrow = input.borrow_mut();
                 *input_borrow = input_borrow[1..].to_string();
-                string_value.push_str(&input_borrow[..handle_json_string(&input_borrow)?]);
-
-                Ok(JsonValue::String(string_value))
+                // PRetty sure need to clone this TODO
+                let input_slice = &input_borrow[..handle_json_string(&input_borrow)?];
+                string_value.push_str(input_slice);
             }
-            b'n' => {
-                let value: Option<&str> = input_borrow.get(0..4);
-                return match value {
-                    Some(x) => {
-                        return match x {
-                            //handle null
-                            "null" => {
-                                *input_borrow = input_borrow[4..].to_string();
-                                Ok(JsonValue::Null)
-                            }
-                            _ => Err(JsonError::InvalidTypeError),
-                        };
-                    }
-                    None => Err(JsonError::RanOutOfCharsError),
-                };
-            }
-            b't' => {
-                let value: Option<&str> = input_borrow.get(0..4);
-                return match value {
-                    Some(x) => {
-                        return match x {
-                            "true" => {
-                                *input_borrow = input_borrow[4..].to_string();
-                                Ok(JsonValue::Boolean(true))
-                            }
-                            _ => Err(JsonError::InvalidTypeError),
-                        }
-                    }
-                    None => Err(JsonError::RanOutOfCharsError),
-                };
-            } //handle true
-            b'f' => {
-                //handle false
-                let value: Option<&str> = input_borrow.get(0..5);
-                return match value {
-                    Some(x) => {
-                        return match x {
-                            "false" => {
-                                *input_borrow = input_borrow[5..].to_string();
-                                Ok(JsonValue::Boolean(false))
-                            }
-                            _ => Err(JsonError::InvalidTypeError),
-                        }
-                    }
-                    None => Err(JsonError::RanOutOfCharsError),
-                };
-            }
-            b' ' | b'\t' | b'\n' | b'\r' => {
-                *input_borrow = input_borrow[1..].to_string();
-                Ok(handle_json_value(Rc::clone(&input))?)
-            }
-            b'{' => {
-                *input_borrow = input_borrow[1..].to_string();
-                Ok(JsonValue::Object(handle_json_obj(Rc::clone(&input))?))
-            }
-            _ => {
-                // TODO exponents might be allowed ie. 1e10.
-                if let Ok(n) = input_borrow[0..handle_json_num(&input_borrow[1..])?].parse::<f64>()
-                {
-                    *input_borrow = input_borrow[1..].to_string();
-                    Ok(JsonValue::Number(n))
+            Ok(JsonValue::String(string_value))
+        }
+        b'n' | b't' => {
+            let next_input_chars: Box<str>;
+            {
+                let input_borrow = input.borrow();
+                if let Some(str) = input_borrow.get(0..4) {
+                    next_input_chars = Box::new(str);
                 } else {
-                    Err(JsonError::InvalidNumberError)
+                    return Err(JsonError::RanOutOfCharsError);
+                };
+            }
+            {
+                let mut input_borrow = input.borrow_mut();
+                *input_borrow = input_borrow[4..].to_string();
+            }
+            return match next_input_chars {
+                //handle null
+                "null" => Ok(JsonValue::Null),
+                "true" => Ok(JsonValue::Boolean(true)),
+                _ => Err(JsonError::InvalidTypeError),
+            };
+        }
+        b'f' => {
+            let next_input_chars: &str;
+            {
+                let input_borrow = input.borrow();
+                if let Some(c) = input_borrow.as_str().get(0..5) {
+                    next_input_chars = c.clone();
+                } else {
+                    return Err(JsonError::RanOutOfCharsError);
+                };
+            }
+            //handle false
+            return match next_input_chars {
+                "false" => {
+                    {
+                        let mut input_borrow = input.borrow_mut();
+                        *input_borrow = input_borrow[5..].to_string();
+                    }
+                    Ok(JsonValue::Boolean(false))
+                }
+                _ => Err(JsonError::InvalidTypeError),
+            };
+        }
+        b' ' | b'\t' | b'\n' | b'\r' => {
+            {
+                let mut input_borrow = input.borrow_mut();
+                *input_borrow = input_borrow[1..].to_string();
+            }
+            Ok(handle_json_value(Rc::clone(&input))?)
+        }
+        b'{' => {
+            {
+                let mut input_borrow = input.borrow_mut();
+                *input_borrow = input_borrow[1..].to_string();
+            }
+            Ok(JsonValue::Object(handle_json_obj(Rc::clone(&input))?))
+        }
+        _ => {
+            // TODO exponents might be allowed ie. 1e10.
+            let num_value: f64;
+            let num_end: usize;
+            {
+                let input_borrow = input.borrow();
+                num_end = handle_json_num(&input_borrow[1..])?;
+                if let Ok(n) = input_borrow[0..num_end].parse::<f64>() {
+                    num_value = n;
+                } else {
+                    return Err(JsonError::InvalidNumberError);
                 }
             }
-        },
-        None => Err(JsonError::RanOutOfCharsError),
+            let mut input_borrow = input.borrow_mut();
+            *input_borrow = input_borrow[num_end..].to_string();
+            Ok(JsonValue::Number(num_value))
+        }
     };
 }
 
@@ -346,11 +384,11 @@ mod test {
 
     #[test]
     fn handle_json_value_good_cases() {
-        let true_value = "true";
-        let false_value = "false";
-        let null_value = "null";
-        let string_value = "\"the world is your oyster\"";
-        let num_value = "2347 ";
+        let true_value = Rc::new(RefCell::new(String::from("true")));
+        let false_value = Rc::new(RefCell::new(String::from("false")));
+        let null_value = Rc::new(RefCell::new(String::from("null")));
+        let string_value = Rc::new(RefCell::new(String::from("\"the world is your oyster\"")));
+        let num_value = Rc::new(RefCell::new(String::from("2347 ")));
         if let JsonValue::String(s) = handle_json_value(string_value).unwrap() {
             assert_eq!(s, "the world is your oyster");
         } else {
@@ -379,9 +417,11 @@ mod test {
 
     #[test]
     fn handle_json_value_cplx_good_cases() {
-        let rand_esc_str = "\"the world \\is your oyster\"";
-        let real_esc_str = "\"\\n yep heres some nums too 102\"";
-        let float_val = "723.47 ";
+        let rand_esc_str = Rc::new(RefCell::new(String::from("\"the world \\is your oyster\"")));
+        let real_esc_str = Rc::new(RefCell::new(String::from(
+            "\"\\n yep heres some nums too 102\"",
+        )));
+        let float_val = Rc::new(RefCell::new(String::from("723.47 ")));
         if let JsonValue::String(s) = handle_json_value(rand_esc_str).unwrap() {
             assert_eq!(s, "the world \\is your oyster");
         } else {
@@ -401,12 +441,12 @@ mod test {
 
     #[test]
     fn handle_json_value_err_cases() {
-        let true_fail = "TRUE";
-        let false_fail = "fALSE";
-        let float_fail = "3.14.15 ";
-        let null_fail = "NuLL";
-        let nan_type = "NaN";
-        let wrong_true = "t2gp";
+        let true_fail = Rc::new(RefCell::new(String::from("TRUE")));
+        let false_fail = Rc::new(RefCell::new(String::from("fALSE")));
+        let float_fail = Rc::new(RefCell::new(String::from("3.14.15 ")));
+        let null_fail = Rc::new(RefCell::new(String::from("NuLL")));
+        let nan_type = Rc::new(RefCell::new(String::from("NaN")));
+        let wrong_true = Rc::new(RefCell::new(String::from("t2gp")));
         assert!(matches!(
             handle_json_value(true_fail).unwrap_err(),
             JsonError::InvalidTypeError
