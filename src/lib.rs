@@ -1,3 +1,4 @@
+pub mod ipc_client;
 pub mod json_parser;
 
 pub fn run() {
