@@ -111,17 +111,12 @@ pub fn stojson(input: Rc<RefCell<String>>) -> Result<JsonEntry, JsonError> {
     let first_input_char: u8;
     {
         let input_borrow = input.borrow();
-        println!("{}", input_borrow);
         if let Some(c) = input_borrow.as_bytes().get(0) {
             first_input_char = c.clone();
         } else {
             return Err(JsonError::RanOutOfCharsError);
         };
     }
-    println!(
-        "turning string to json with first char: {}",
-        first_input_char
-    );
     match first_input_char {
         b' ' | b'\t' | b'\n' | b'\r' => {
             {
@@ -139,7 +134,6 @@ pub fn stojson(input: Rc<RefCell<String>>) -> Result<JsonEntry, JsonError> {
                 //input_borrow.chars().next_back();
                 *input_borrow = input_borrow.as_str()[1..].to_string();
             }
-            println!("peeling braces to yield: {}", input.borrow());
             Ok(JsonEntry::Object(handle_json_obj(Rc::clone(&input))?))
         }
         b'[' => Ok(stojson_list(Rc::clone(&input))?),
@@ -150,11 +144,9 @@ pub fn stojson(input: Rc<RefCell<String>>) -> Result<JsonEntry, JsonError> {
 
 // takes a potential json list with [ peeled off (the object should look like '..]')
 fn handle_json_list(input: Rc<RefCell<String>>) -> Result<Vec<JsonValue>, JsonError> {
-    println!("handling json list");
     let first_input_char: u8;
     {
         let input_borrow = input.borrow();
-        println!("{}", input_borrow);
         if let Some(c) = input_borrow.as_bytes().get(0) {
             first_input_char = c.clone();
         } else {
@@ -170,7 +162,6 @@ fn handle_json_list(input: Rc<RefCell<String>>) -> Result<Vec<JsonValue>, JsonEr
                 *input_borrow = input_borrow.as_str()[1..].to_string();
             }
             let output = &mut handle_json_list(Rc::clone(&input))?;
-            println!("appending: {:?}", output);
             result.append(output);
             return Ok(result);
         }
@@ -191,11 +182,9 @@ fn handle_json_list(input: Rc<RefCell<String>>) -> Result<Vec<JsonValue>, JsonEr
 
 // takes in a potential json object with { peeled off (the object should look like '..}' ) creates a list of key:value pairs
 fn handle_json_obj(input: Rc<RefCell<String>>) -> Result<JsonObj, JsonError> {
-    println!("handling json obj");
     let first_input_char: u8;
     {
         let input_borrow = input.borrow();
-        println!("{}", input_borrow);
         if let Some(c) = input_borrow.as_bytes().get(0) {
             first_input_char = c.clone();
         } else {
@@ -210,7 +199,6 @@ fn handle_json_obj(input: Rc<RefCell<String>>) -> Result<JsonObj, JsonError> {
     match first_input_char {
         b' ' | b'\t' | b'\n' | b'\r' | b',' => {
             let output = &mut handle_json_obj(Rc::clone(&input))?;
-            println!("appending: {:?}", output);
             result.append(output);
             return Ok(result);
         }
@@ -226,7 +214,6 @@ fn handle_json_obj(input: Rc<RefCell<String>>) -> Result<JsonObj, JsonError> {
 
 // creates a key:value pair from 'k" .. : .. v'
 fn handle_json_kvpair(input: Rc<RefCell<String>>) -> Result<JsonKVPair, JsonError> {
-    println!("handling KV pair");
     let key_end: usize;
     let mut result: JsonKVPair = JsonKVPair {
         key: String::new(),
@@ -235,7 +222,6 @@ fn handle_json_kvpair(input: Rc<RefCell<String>>) -> Result<JsonKVPair, JsonErro
     {
         let input_borrow = input.borrow();
         key_end = handle_json_string(&input_borrow)? - 1;
-        println!("pushing: {}", &input_borrow[..key_end]);
         result.key.push_str(&input_borrow[..key_end]);
     }
     // key_end is the ending index, but we want to remove that and the :
@@ -251,7 +237,6 @@ fn handle_json_kvpair(input: Rc<RefCell<String>>) -> Result<JsonKVPair, JsonErro
     {
         let mut input_borrow = input.borrow_mut();
         *input_borrow = input_borrow[val_start..].to_string();
-        println!("checking for value in: {}", &input_borrow);
     }
     result.value = handle_json_value(Rc::clone(&input))?;
     return Ok(result);
@@ -259,7 +244,6 @@ fn handle_json_kvpair(input: Rc<RefCell<String>>) -> Result<JsonKVPair, JsonErro
 
 // Returns the index of the : separator
 fn find_value_start(input: &str) -> Result<usize, JsonError> {
-    println!("finding starting value from: {}", input);
     let mut result: usize = 0;
     for byte in input.as_bytes() {
         match byte {
@@ -290,7 +274,6 @@ fn handle_json_string(input: &str) -> Result<usize, JsonError> {
 // handles values in the format wv.. where w is any whitespace, v is the value and any remaining
 // json strings that occur after
 fn handle_json_value(input: Rc<RefCell<String>>) -> Result<JsonValue, JsonError> {
-    println!("handling value from: {}", input.borrow());
     let first_input_char: u8;
     {
         let input_borrow = input.borrow();
