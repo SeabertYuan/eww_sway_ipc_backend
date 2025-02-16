@@ -1,5 +1,8 @@
-use std::env;
+//use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
+use std::{env, io};
 
+#[repr(u32)]
 enum IPCMessages {
     RunCommand = 0u32,
     GetWorkspaces = 1u32,
@@ -18,17 +21,18 @@ enum IPCMessages {
     GetSeats = 101u32,
 }
 
+#[repr(u32)]
 enum IPCEvents {
-    Workspace = (1u32<<31) | 0,
-    Output = (1u32<<31) | 1,
-    Mode = (1u32<<31) | 2,
-    Window = (1u32<<31) | 3,
-    BarConfigUpdate = (1u32<<31) | 4,
-    Binding = (1u32<<31) | 5,
-    Shutdown = (1u32<<31) | 6,
-    Tick = (1u32<<31) | 7,
-    BarStateUpdate = (1u32<<31) | 0x14,
-    Input = (1u32<<31) | 0x15,
+    Workspace = (1u32 << 31) | 0,
+    Output = (1u32 << 31) | 1,
+    Mode = (1u32 << 31) | 2,
+    Window = (1u32 << 31) | 3,
+    BarConfigUpdate = (1u32 << 31) | 4,
+    Binding = (1u32 << 31) | 5,
+    Shutdown = (1u32 << 31) | 6,
+    Tick = (1u32 << 31) | 7,
+    BarStateUpdate = (1u32 << 31) | 0x14,
+    Input = (1u32 << 31) | 0x15,
 }
 
 struct IPCFormat {
@@ -37,6 +41,16 @@ struct IPCFormat {
     payload: String,
 }
 
-const MAGIC_STR: str = "i3-ipc";
+const MAGIC_STR: &str = "i3-ipc";
 
-let socket_path_opt: Option<std::ffi::OsString> = env::var_os("SWAYSOCK");
+fn connect() -> io::Result<()> {
+    if let Some(opt) = env::var_os("SWAYSOCK") {
+        // connect
+        let fd = UnixStream::connect(opt)?;
+    };
+    Ok(())
+}
+
+fn send_msg() -> io::Result<()> {
+    Ok(())
+}
