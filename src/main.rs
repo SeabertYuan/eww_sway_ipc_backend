@@ -1,11 +1,15 @@
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::error::Error;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::rc::Rc;
 use std::{env, io, str};
 
 use eww_sway_ipc_backend::*;
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), Box<dyn Error>> {
     eww_sway_ipc_backend::run();
     let socket_path_opt: Option<std::ffi::OsString> = env::var_os("SWAYSOCK");
     let socket_path: OsString = match socket_path_opt {
@@ -20,36 +24,39 @@ fn main() -> io::Result<()> {
 
     let mut socket = UnixStream::connect(socket_path)?;
 
+    // get workspaces
     let message_b: [u8; 14] = [
         0x69, 0x33, 0x2d, 0x69, 0x70, 0x63, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
     ];
-    let message_b_2: [u8; 16] = [
+    // sway exit command
+    let message_b_2: [u8; 18] = [
         0x69, 0x33, 0x2d, 0x69, 0x70, 0x63, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x65,
-        0x78,
+        0x78, 0x69, 0x74,
     ];
-    socket.write_all(&message_b)?;
-    println!("Written message!");
+    socket.write(&message_b)?;
+    println!("Written message! {}", std::str::from_utf8(&message_b)?);
     socket.shutdown(std::net::Shutdown::Write)?;
     println!("shut down!");
-    let mut buf_string: String = String::new();
-    let mut buf: [u8; 32] = [0; 32];
-    while let Ok(bytes_read) = socket.read(&mut buf) {
-        //println!("{bytes_read}");
-        if bytes_read < 32 {
-            buf_string.push_str(str::from_utf8(&buf[0..bytes_read]).unwrap());
-            break;
-        } else {
-            buf_string.push_str(str::from_utf8(&buf).unwrap());
-        }
-    }
-    println!("Read the message!");
+    let mut buf_header: [u8; 14] = [0u8; 14];
+    socket.read_exact(&mut buf_header)?;
+
+    let payload_size: u32 =
+        u32::from_ne_bytes([buf_header[6], buf_header[7], buf_header[8], buf_header[9]]);
+    println!("Parsed payload size!");
+
+    let mut payload = vec![0u8; payload_size as usize];
+    socket.read_exact(&mut payload)?;
     //println!("Returned the message: {buf_string}");
 
-    let buf_string_json: &str = &buf_string[16..buf_string.len() - 2];
+    let buf_string_json: String = String::from_utf8_lossy(&payload).into_owned();
 
-    let num_workspaces: i32 = get_num_workspaces(buf_string_json);
+    println!("{}", buf_string_json);
 
-    println!("The number of workspaces is: {num_workspaces}");
+    if let Ok(eww_sway_ipc_backend::json_parser::JsonEntry::Array(res)) =
+        eww_sway_ipc_backend::json_parser::stojson_list(Rc::new(RefCell::new(buf_string_json)))
+    {
+        println!("Number of workspaces: {}", res.len());
+    }
 
     Ok(())
 }
