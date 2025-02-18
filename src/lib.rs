@@ -2,6 +2,7 @@ pub mod ipc_client;
 pub mod json_parser;
 
 pub fn run() {
+    ipc_client::run_ipc();
     println!("ran");
 }
 

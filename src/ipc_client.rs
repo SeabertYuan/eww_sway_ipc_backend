@@ -1,6 +1,12 @@
-//use std::io::{Read, Write};
+use std::cell::RefCell;
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::{env, io};
+
+use crate::json_parser;
 
 #[repr(u32)]
 enum IPCMessages {
@@ -35,6 +41,15 @@ enum IPCEvents {
     Input = (1u32 << 31) | 0x15,
 }
 
+pub enum IPCError {
+    ConnectionError(io::Error),
+    PathNotFoundError,
+    GeneralError,
+    WriteError(io::Error),
+    ShutdownError(io::Error),
+    JsonError(json_parser::JsonError),
+}
+
 struct IPCFormat {
     payload_len: u32,
     payload_type: u32,
@@ -43,14 +58,84 @@ struct IPCFormat {
 
 const MAGIC_STR: &str = "i3-ipc";
 
-fn connect() -> io::Result<()> {
-    if let Some(opt) = env::var_os("SWAYSOCK") {
-        // connect
-        let fd = UnixStream::connect(opt)?;
-    };
-    Ok(())
+fn connect() -> Result<UnixStream, IPCError> {
+    match env::var_os("SWAYSOCK") {
+        Some(opt) => {
+            // connect
+            match UnixStream::connect(opt) {
+                Ok(fd) => return Ok(fd),
+                Err(e) => return Err(IPCError::ConnectionError(e)),
+            }
+        }
+        None => {
+            return Err(IPCError::PathNotFoundError);
+        }
+    }
 }
 
 fn send_msg() -> io::Result<()> {
     Ok(())
+}
+
+pub fn run_ipc() -> Result<(), IPCError> {
+    let fd = Arc::new(Mutex::new(connect()?));
+
+    let workspace_msg = IPCFormat {
+        payload_len: 13,
+        payload_type: IPCMessages::Subscribe as u32,
+        payload: String::from("[\"workspace\"]"),
+    };
+
+    let workspace_thread = thread::spawn(move || {
+        let fd_borrow = Arc::clone(&fd);
+        send(fd_borrow, workspace_msg);
+        let fd_borrow_2 = Arc::clone(&fd);
+        recv(fd_borrow_2);
+    });
+
+    workspace_thread.join().unwrap();
+
+    println!("done");
+    Ok(())
+}
+
+fn send(fd: Arc<Mutex<UnixStream>>, message: IPCFormat) -> Result<(), IPCError> {
+    let mut payload: Vec<u8> = message.payload.as_bytes().to_vec();
+    let mut header: Vec<u8> = MAGIC_STR.as_bytes().to_vec();
+    header.append(&mut message.payload_len.to_ne_bytes().to_vec());
+    header.append(&mut message.payload_type.to_ne_bytes().to_vec());
+    header.append(&mut payload);
+
+    let mut fd = fd.lock().unwrap();
+    match fd.write(&header) {
+        Ok(_) => {} // TODO: should check the number of bytes written == to size of the message, if
+        // not throw a new error.
+        Err(e) => return Err(IPCError::WriteError(e)),
+    }
+
+    match fd.shutdown(std::net::Shutdown::Write) {
+        Ok(_) => {} // TODO: same
+        Err(e) => return Err(IPCError::ShutdownError(e)),
+    }
+
+    Ok(())
+}
+
+fn recv(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<json_parser::JsonEntry, IPCError> {
+    let mut fd = fd_mutex.lock().unwrap();
+    let mut buf_header = [0u8; 14];
+    fd.read_exact(&mut buf_header);
+    let payload_size: u32 =
+        u32::from_ne_bytes([buf_header[6], buf_header[7], buf_header[8], buf_header[9]]);
+    let mut payload = vec![0u8; payload_size as usize];
+    fd.read_exact(&mut payload);
+    let buf_string_json: String = String::from_utf8_lossy(&payload).into_owned();
+    match buf_string_json.as_str() {
+        "{\"success\": true}" => Ok(recv(Arc::clone(&fd_mutex))?),
+        "{\"success\": false}" => Err(IPCError::GeneralError),
+        _ => match json_parser::stojson_list(Rc::new(RefCell::new(buf_string_json))) {
+            Ok(json) => Ok(json),
+            Err(e) => Err(IPCError::JsonError(e)),
+        },
+    }
 }
