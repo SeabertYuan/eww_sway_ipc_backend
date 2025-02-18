@@ -221,7 +221,7 @@ fn handle_json_kvpair(input: Rc<RefCell<String>>) -> Result<JsonKVPair, JsonErro
     };
     {
         let input_borrow = input.borrow();
-        key_end = handle_json_string(&input_borrow)? - 1;
+        key_end = handle_json_string(&input_borrow.as_bytes())? - 1;
         result.key.push_str(&input_borrow[..key_end]);
     }
     // key_end is the ending index, but we want to remove that and the :
@@ -257,10 +257,10 @@ fn find_value_start(input: &str) -> Result<usize, JsonError> {
 }
 
 // returns the first index after the last " is in the original json string ".."
-fn handle_json_string(input: &str) -> Result<usize, JsonError> {
-    return match input.as_bytes().get(0) {
+fn handle_json_string(input: &[u8]) -> Result<usize, JsonError> {
+    return match input.get(0) {
         Some(b) => match b {
-            b'\\' => match input.as_bytes().get(2) {
+            b'\\' => match input.get(2) {
                 Some(_c) => Ok(2 + handle_json_string(&input[2..])?),
                 None => Err(JsonError::RanOutOfCharsError),
             },
@@ -291,7 +291,7 @@ fn handle_json_value(input: Rc<RefCell<String>>) -> Result<JsonValue, JsonError>
                 let mut input_borrow = input.borrow_mut();
                 *input_borrow = input_borrow[1..].to_string();
                 // PRetty sure need to clone this TODO
-                let end_val = handle_json_string(&input_borrow)? - 1;
+                let end_val = handle_json_string(&input_borrow.as_bytes())? - 1;
                 let input_slice = &input_borrow[..end_val];
                 string_value.push_str(input_slice);
                 *input_borrow = input_borrow[end_val + 1..].to_string();
@@ -438,17 +438,20 @@ mod test {
         let empty_good = "\"";
         let simple_fail = "hello";
         let escape_fail = "this fails\\";
-        assert_eq!(handle_json_string(simple_good).unwrap(), 6);
-        assert_eq!(handle_json_string(escaped_r_good).unwrap(), 7);
-        assert_eq!(handle_json_string(escape_proper_good).unwrap(), 20);
-        assert_eq!(handle_json_string(longer_good).unwrap(), 5);
-        assert_eq!(handle_json_string(empty_good).unwrap(), 1);
+        assert_eq!(handle_json_string(simple_good.as_bytes()).unwrap(), 6);
+        assert_eq!(handle_json_string(escaped_r_good.as_bytes()).unwrap(), 7);
+        assert_eq!(
+            handle_json_string(escape_proper_good.as_bytes()).unwrap(),
+            20
+        );
+        assert_eq!(handle_json_string(longer_good.as_bytes()).unwrap(), 5);
+        assert_eq!(handle_json_string(empty_good.as_bytes()).unwrap(), 1);
         assert!(matches!(
-            handle_json_string(simple_fail).unwrap_err(),
+            handle_json_string(simple_fail.as_bytes()).unwrap_err(),
             JsonError::RanOutOfCharsError
         ));
         assert!(matches!(
-            handle_json_string(escape_fail).unwrap_err(),
+            handle_json_string(escape_fail.as_bytes()).unwrap_err(),
             JsonError::RanOutOfCharsError
         ));
     }

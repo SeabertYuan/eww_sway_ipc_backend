@@ -87,10 +87,20 @@ pub fn run_ipc() -> Result<(), IPCError> {
     };
 
     let workspace_thread = thread::spawn(move || {
-        let fd_borrow = Arc::clone(&fd);
-        send(fd_borrow, workspace_msg);
-        let fd_borrow_2 = Arc::clone(&fd);
-        recv(fd_borrow_2);
+        println!("created new thread");
+        loop {
+            let fd_borrow = Arc::clone(&fd);
+            send(fd_borrow, &workspace_msg);
+            let fd_borrow_2 = Arc::clone(&fd);
+            let num_workspaces = match recv(fd_borrow_2) {
+                Ok(json) => match json {
+                    json_parser::JsonEntry::Array(jsarr) => jsarr.len(),
+                    _ => 0 as usize,
+                },
+                Err(e) => 0,
+            };
+            println!("{}", num_workspaces);
+        }
     });
 
     workspace_thread.join().unwrap();
@@ -99,7 +109,7 @@ pub fn run_ipc() -> Result<(), IPCError> {
     Ok(())
 }
 
-fn send(fd: Arc<Mutex<UnixStream>>, message: IPCFormat) -> Result<(), IPCError> {
+fn send(fd: Arc<Mutex<UnixStream>>, message: &IPCFormat) -> Result<(), IPCError> {
     let mut payload: Vec<u8> = message.payload.as_bytes().to_vec();
     let mut header: Vec<u8> = MAGIC_STR.as_bytes().to_vec();
     header.append(&mut message.payload_len.to_ne_bytes().to_vec());
@@ -131,11 +141,28 @@ fn recv(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<json_parser::JsonEntry, IPCE
     fd.read_exact(&mut payload);
     let buf_string_json: String = String::from_utf8_lossy(&payload).into_owned();
     match buf_string_json.as_str() {
-        "{\"success\": true}" => Ok(recv(Arc::clone(&fd_mutex))?),
+        "{\"success\": true}" => {
+            drop(fd);
+            Ok(recv(Arc::clone(&fd_mutex))?)
+        }
         "{\"success\": false}" => Err(IPCError::GeneralError),
-        _ => match json_parser::stojson_list(Rc::new(RefCell::new(buf_string_json))) {
-            Ok(json) => Ok(json),
-            Err(e) => Err(IPCError::JsonError(e)),
-        },
+        _ => {
+            let mut payload = MAGIC_STR.as_bytes().to_vec();
+            payload.append(&mut [0u8; 4].to_vec());
+            payload.append(&mut (IPCMessages::GetWorkspaces as usize).to_ne_bytes().to_vec());
+            fd.write(&mut payload);
+            fd.shutdown(std::net::Shutdown::Write);
+            let mut buf_header = [0u8; 14];
+            fd.read_exact(&mut buf_header);
+            let payload_size: u32 =
+                u32::from_ne_bytes([buf_header[6], buf_header[7], buf_header[8], buf_header[9]]);
+            let mut payload = vec![0u8; payload_size as usize];
+            fd.read_exact(&mut payload);
+            let buf_string_json: String = String::from_utf8_lossy(&payload).into_owned();
+            match json_parser::stojson(Rc::new(RefCell::new(buf_string_json))) {
+                Ok(json) => Ok(json),
+                Err(e) => Err(IPCError::JsonError(e)),
+            }
+        }
     }
 }
