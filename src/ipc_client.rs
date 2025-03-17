@@ -41,6 +41,7 @@ enum IPCEvents {
     Input = (1u32 << 31) | 0x15,
 }
 
+#[derive(Debug)]
 pub enum IPCError {
     ConnectionError(io::Error),
     PathNotFoundError,
@@ -91,6 +92,7 @@ fn send_msg() -> io::Result<()> {
 
 pub fn run_ipc() -> Result<(), IPCError> {
     let (tx, rx) = mpsc::channel();
+    let (ws_tx, ws_rx) = mpsc::channel();
 
     let workspace_msg = IPCFormat {
         payload_len: 13,
@@ -99,29 +101,34 @@ pub fn run_ipc() -> Result<(), IPCError> {
     };
 
     let event_listener_thread = thread::spawn(move || {
-        let fd = Arc::new(Mutex::new(connect()?));
-        println!("created new thread");
-        loop {
-            println!("loopstart");
-            let fd_borrow = Arc::clone(&fd);
-            send(fd_borrow, &workspace_msg);
-            let fd_borrow_2 = Arc::clone(&fd);
-            if let Ok(json_string) = recv(fd_borrow_2) {
-                match json_string.as_str() {
-                    "{\"success\": true}" => {
-                        println!("subscribed!");
-                        // TODO handle this?
-                        if let Ok(json_event_string) = recv(Arc::clone(&fd)) {
-                            ws_event_handler(Arc::clone(&fd), json_event_string.as_str());
+        if let Ok(fd) = connect() {
+            let fd_mutex = Arc::new(Mutex::new(fd));
+            println!("created new thread");
+            loop {
+                println!("loopstart");
+                let fd_borrow = Arc::clone(&fd_mutex);
+                send(fd_borrow, &workspace_msg);
+                let fd_borrow_2 = Arc::clone(&fd_mutex);
+                if let Ok(json_string) = recv(fd_borrow_2) {
+                    match json_string.as_str() {
+                        "{\"success\": true}" => {
+                            println!("subscribed!");
+                            // TODO handle this?
+                            if let Ok(json_event_string) = recv(Arc::clone(&fd_mutex)) {
+                                ws_event_handler(Arc::clone(&fd_mutex), json_event_string.as_str());
+                            }
                         }
-                    }
-                    "{\"success\": false}" => panic!("RUH ROH FAILED OT SUBSCRIPT"), // TODO handle
-                                                                                     // this better
-                    _ => {
-                        println!("event triggered");
-                        // TODO handle this
-                        if let Ok(json_event_string) = recv(Arc::clone(&fd)) {
-                            ws_event_handler(Arc::clone(&fd), json_event_string.as_str());
+                        "{\"success\": false}" => panic!("RUH ROH FAILED OT SUBSCRIPT"), // TODO handle
+                                                                                         // this better
+                        _ => {
+                            println!("event triggered");
+                            // TODO handle this
+                            if let Ok(json_event_string) = recv(Arc::clone(&fd_mutex)) {
+                                tx.send(1).unwrap();
+                                let ans = ws_rx.recv().unwrap();
+                                println!("heard {:?}", ans);
+                                //ws_event_handler(Arc::clone(&fd_mutex), json_event_string.as_str());
+                            }
                         }
                     }
                 }
@@ -130,12 +137,29 @@ pub fn run_ipc() -> Result<(), IPCError> {
     });
 
     let workspace_status_thread = thread::spawn(move || {
-        let fd = Arc::new(Mutex::new(connect()?));
+        if let Ok(fd) = connect() {
+            let fd_mutex = Arc::new(Mutex::new(fd));
+            loop {
+                let job = rx.recv().unwrap();
+                if job == 1 {
+                    let message = IPCFormat {
+                        payload_len: 0,
+                        payload_type: IPCMessages::GetWorkspaces as u32,
+                        payload: String::from(""),
+                    };
+                    send(Arc::clone(&fd_mutex), &message);
+                    let workspace_data = recv(Arc::clone(&fd_mutex)).unwrap();
+                    // TODO use this thread to manipulate the data.
+                    ws_tx.send(workspace_data).unwrap();
+                }
+            }
+        }
         // TODO send and receive messages from event_listener_thread
     });
 
 
-    workspace_thread.join().unwrap();
+    workspace_status_thread.join().unwrap();
+    event_listener_thread.join().unwrap();
 
     println!("done");
     Ok(())
