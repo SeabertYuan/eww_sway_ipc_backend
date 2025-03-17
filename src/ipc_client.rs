@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::{env, io};
 
@@ -67,6 +67,7 @@ const MAGIC_STR: &str = "i3-ipc";
 enum WorkspaceEvent_T {
     Focused,
     Initialized,
+    Empty,
 }
 
 fn connect() -> Result<UnixStream, IPCError> {
@@ -89,7 +90,7 @@ fn send_msg() -> io::Result<()> {
 }
 
 pub fn run_ipc() -> Result<(), IPCError> {
-    let fd = Arc::new(Mutex::new(connect()?));
+    let (tx, rx) = mpsc::channel();
 
     let workspace_msg = IPCFormat {
         payload_len: 13,
@@ -97,7 +98,8 @@ pub fn run_ipc() -> Result<(), IPCError> {
         payload: String::from("[\"workspace\"]"),
     };
 
-    let workspace_thread = thread::spawn(move || {
+    let event_listener_thread = thread::spawn(move || {
+        let fd = Arc::new(Mutex::new(connect()?));
         println!("created new thread");
         loop {
             println!("loopstart");
@@ -127,6 +129,12 @@ pub fn run_ipc() -> Result<(), IPCError> {
         }
     });
 
+    let workspace_status_thread = thread::spawn(move || {
+        let fd = Arc::new(Mutex::new(connect()?));
+        // TODO send and receive messages from event_listener_thread
+    });
+
+
     workspace_thread.join().unwrap();
 
     println!("done");
@@ -146,12 +154,6 @@ fn send(fd: Arc<Mutex<UnixStream>>, message: &IPCFormat) -> Result<(), IPCError>
         // not throw a new error.
         Err(e) => return Err(IPCError::WriteError(e)),
     }
-
-    //match fd.shutdown(std::net::Shutdown::Write) {
-    //    Ok(_) => {} // TODO: same
-    //    Err(e) => return Err(IPCError::ShutdownError(e)),
-    //}
-
     Ok(())
 }
 
@@ -171,7 +173,7 @@ fn ws_event_handler(fd_mutex: Arc<Mutex<UnixStream>>, json_str: &str) -> Result<
         Ok(WorkspaceEvent_T::Focused) => {
             ws_focus_handler(Arc::clone(&fd_mutex));
         }
-        Ok(WorkspaceEvent_T::Initialized) => {
+        Ok(WorkspaceEvent_T::Initialized) | Ok(WorkspaceEvent_T::Empty) => {
             // TODO handle
             if let Ok(focus_json_str) = recv(Arc::clone(&fd_mutex)) {
                 ws_event_handler(Arc::clone(&fd_mutex), &focus_json_str.as_str());
@@ -220,6 +222,8 @@ fn client_state_mux(ipc_message: &str) -> Result<WorkspaceEvent_T, IPCError> {
                 return Ok(WorkspaceEvent_T::Focused);
             } else if &ipc_message [13..17] == "init" {
                 return Ok(WorkspaceEvent_T::Initialized);
+            } else if &ipc_message [13..18] == "empty" {
+                return Ok(WorkspaceEvent_T::Empty);
             } else {
                 return Err(IPCError::GeneralError);
             }
