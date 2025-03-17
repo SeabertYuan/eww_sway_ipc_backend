@@ -103,34 +103,21 @@ pub fn run_ipc() -> Result<(), IPCError> {
     let event_listener_thread = thread::spawn(move || {
         if let Ok(fd) = connect() {
             let fd_mutex = Arc::new(Mutex::new(fd));
-            println!("created new thread");
-            loop {
-                println!("loopstart");
-                let fd_borrow = Arc::clone(&fd_mutex);
-                send(fd_borrow, &workspace_msg);
-                let fd_borrow_2 = Arc::clone(&fd_mutex);
-                if let Ok(json_string) = recv(fd_borrow_2) {
-                    match json_string.as_str() {
-                        "{\"success\": true}" => {
-                            println!("subscribed!");
-                            // TODO handle this?
-                            if let Ok(json_event_string) = recv(Arc::clone(&fd_mutex)) {
-                                ws_event_handler(Arc::clone(&fd_mutex), json_event_string.as_str());
-                            }
-                        }
-                        "{\"success\": false}" => panic!("RUH ROH FAILED OT SUBSCRIPT"), // TODO handle
-                                                                                         // this better
-                        _ => {
-                            println!("event triggered");
-                            // TODO handle this
-                            if let Ok(json_event_string) = recv(Arc::clone(&fd_mutex)) {
-                                tx.send(1).unwrap();
-                                let ans = ws_rx.recv().unwrap();
-                                println!("heard {:?}", ans);
-                                //ws_event_handler(Arc::clone(&fd_mutex), json_event_string.as_str());
-                            }
-                        }
+            //println!("created new thread");
+            let fd_borrow = Arc::clone(&fd_mutex);
+            send(fd_borrow, &workspace_msg);
+            let fd_borrow_2 = Arc::clone(&fd_mutex);
+            if let Ok(json_string) = recv(fd_borrow_2) {
+                match json_string.as_str() {
+                    "{\"success\": true}" => {
+                        //println!("subscribed!");
+                        // TODO handle this error?
+                        listen(Arc::clone(&fd_mutex), &tx, &ws_rx);
                     }
+                    "{\"success\": false}" => panic!("RUH ROH FAILED OT SUBSCRIPT"), // TODO handle
+                                                                                     // this better
+                    _ => { panic!("SHOULD NOT GET HERE");
+                                            }
                 }
             }
         }
@@ -141,16 +128,19 @@ pub fn run_ipc() -> Result<(), IPCError> {
             let fd_mutex = Arc::new(Mutex::new(fd));
             loop {
                 let job = rx.recv().unwrap();
-                if job == 1 {
-                    let message = IPCFormat {
-                        payload_len: 0,
-                        payload_type: IPCMessages::GetWorkspaces as u32,
-                        payload: String::from(""),
-                    };
-                    send(Arc::clone(&fd_mutex), &message);
-                    let workspace_data = recv(Arc::clone(&fd_mutex)).unwrap();
-                    // TODO use this thread to manipulate the data.
-                    ws_tx.send(workspace_data).unwrap();
+                match job {
+                    IPCMessages::GetWorkspaces => {
+                        let message = IPCFormat {
+                            payload_len: 0,
+                            payload_type: IPCMessages::GetWorkspaces as u32,
+                            payload: String::from(""),
+                        };
+                        send(Arc::clone(&fd_mutex), &message);
+                        let workspace_data = recv(Arc::clone(&fd_mutex)).unwrap();
+                        // TODO use this thread to manipulate the data.
+                        ws_tx.send(workspace_data).unwrap();
+                    }
+                    _ => continue,
                 }
             }
         }
@@ -161,7 +151,7 @@ pub fn run_ipc() -> Result<(), IPCError> {
     workspace_status_thread.join().unwrap();
     event_listener_thread.join().unwrap();
 
-    println!("done");
+    //println!("done");
     Ok(())
 }
 
@@ -192,15 +182,25 @@ fn recv(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<String, IPCError> {
     Ok(String::from_utf8_lossy(&payload).into_owned())
 }
 
-fn ws_event_handler(fd_mutex: Arc<Mutex<UnixStream>>, json_str: &str) -> Result<(), IPCError> {
+fn listen(fd_mutex: Arc<Mutex<UnixStream>>, tx: &mpsc::Sender<IPCMessages>, ws_rx: &mpsc::Receiver<String>) -> Result<(), IPCError> {
+    loop {
+        //println!("event triggered");
+        // TODO handle this error
+        if let Ok(json_event_string) = recv(Arc::clone(&fd_mutex)) {
+            ws_event_handler(Arc::clone(&fd_mutex), &json_event_string.as_str(), &tx, &ws_rx);
+        }
+    }
+}
+
+fn ws_event_handler(fd_mutex: Arc<Mutex<UnixStream>>, json_str: &str, tx: &mpsc::Sender<IPCMessages>, ws_rx: &mpsc::Receiver<String>) -> Result<(), IPCError> {
     match client_state_mux(json_str) {
         Ok(WorkspaceEventT::Focused) => {
-            ws_focus_handler(Arc::clone(&fd_mutex));
+            ws_focus_handler(Arc::clone(&fd_mutex), &tx, &ws_rx);
         }
         Ok(WorkspaceEventT::Initialized) | Ok(WorkspaceEventT::Empty) => {
             // TODO handle
-            if let Ok(focus_json_str) = recv(Arc::clone(&fd_mutex)) {
-                ws_event_handler(Arc::clone(&fd_mutex), &focus_json_str.as_str());
+            if let Ok(next_json_str) = recv(Arc::clone(&fd_mutex)) {
+                ws_event_handler(Arc::clone(&fd_mutex), &next_json_str.as_str(), &tx, &ws_rx);
             }
         }
         Err(e) => return Err(e),
@@ -209,27 +209,19 @@ fn ws_event_handler(fd_mutex: Arc<Mutex<UnixStream>>, json_str: &str) -> Result<
     Ok(())
 }
 
-fn ws_focus_handler(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<(), IPCError> {
-    let mut fd = fd_mutex.lock().unwrap();
-    let message = IPCFormat {
-                        payload_len: 0,
-                        payload_type: IPCMessages::GetWorkspaces as u32,
-                        payload: String::from(""),
-                    };
-    send(Arc::clone(&fd), message);
-    let buf_string_json: String = recv(Arc::clone(&fd))?;
-    println!("{}", buf_string_json);
+fn ws_focus_handler(fd_mutex: Arc<Mutex<UnixStream>>, tx: &mpsc::Sender<IPCMessages>, ws_rx: &mpsc::Receiver<String>) -> Result<(), IPCError> {
+    tx.send(IPCMessages::GetWorkspaces).unwrap();
+    let buf_string_json: String = ws_rx.recv().unwrap();
+    //println!("{}", buf_string_json);
     if let Ok(json_parser::JsonEntry::Array(workspace_json)) = json_parser::stojson(Rc::new(RefCell::new(buf_string_json))) {
         println!("Workspaces: {}", workspace_json.len());
     }
-
     Ok(())
 }
 
 fn client_state_mux(ipc_message: &str) -> Result<WorkspaceEventT, IPCError> {
-    let match_key: &str = "{ \"change\": ";
     return match &ipc_message[0..12] {
-        match_key => {
+        "{ \"change\": " => {
             if &ipc_message[13..18] == "focus" {
                 return Ok(WorkspaceEventT::Focused);
             } else if &ipc_message [13..17] == "init" {
