@@ -40,8 +40,8 @@ pub enum JsonEntry {
 
 #[derive(Debug)]
 pub struct JsonKVPair {
-    key: String,
-    value: JsonValue,
+    pub key: String,
+    pub value: JsonValue,
 }
 
 pub type JsonObj = Vec<JsonKVPair>;

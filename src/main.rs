@@ -9,6 +9,74 @@ use eww_sway_ipc_backend::*;
 
 fn main() -> Result<(), Box<dyn Error>> {
     crate::run();
+    //bruh2();
+    Ok(())
+}
+
+fn bruh2() -> Result<(), Box<dyn Error>> {
+    let workspace_b: [u8; 14] = [
+        0x69, 0x33, 0x2d, 0x69, 0x70, 0x63, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    ];
+
+    let socket_path_opt: Option<std::ffi::OsString> = env::var_os("SWAYSOCK");
+    let socket_path: OsString = match socket_path_opt {
+        Some(path) => path,
+        None => panic!("Sway IPC socket path not found"),
+    };
+    let path_string: String = socket_path
+        .clone()
+        .into_string()
+        .unwrap_or_else(|res| panic!("something went wrong with result: {res:?}"));
+    println!("got path: {}", path_string);
+    let mut socket = UnixStream::connect(&socket_path).unwrap();
+
+    socket.write_all(&workspace_b);
+    //socket.shutdown(std::net::Shutdown::Write);
+
+    let mut buf_header: [u8; 14] = [0u8; 14];
+    socket.read_exact(&mut buf_header);
+
+    let payload_size: u32 =
+        u32::from_ne_bytes([buf_header[6], buf_header[7], buf_header[8], buf_header[9]]);
+    println!("Parsed payload size!");
+
+    let mut payload = vec![0u8; payload_size as usize];
+    socket.read_exact(&mut payload);
+    //println!("Returned the message: {buf_string}");
+
+    let buf_string_json: String = String::from_utf8_lossy(&payload).into_owned();
+
+    println!("{}", buf_string_json);
+
+    //socket.shutdown(std::net::Shutdown::Read);
+
+    println!("trying to write again!");
+
+    socket.write_all(&workspace_b);
+    //socket.shutdown(std::net::Shutdown::Write);
+
+    let mut buf_header: [u8; 14] = [0u8; 14];
+    socket.read_exact(&mut buf_header);
+
+    let payload_size: u32 =
+        u32::from_ne_bytes([buf_header[6], buf_header[7], buf_header[8], buf_header[9]]);
+    println!("Parsed payload size!");
+
+    let mut payload = vec![0u8; payload_size as usize];
+    socket.read_exact(&mut payload);
+    //println!("Returned the message: {buf_string}");
+
+    let buf_string_json: String = String::from_utf8_lossy(&payload).into_owned();
+
+    println!("{}", buf_string_json);
+
+    /*
+    if let Ok(eww_sway_ipc_backend::json_parser::JsonEntry::Array(res)) =
+        eww_sway_ipc_backend::json_parser::stojson_list(Rc::new(RefCell::new(buf_string_json)))
+    {
+        println!("Number of workspaces: {}", res.len());
+    }
+    */
     Ok(())
 }
 

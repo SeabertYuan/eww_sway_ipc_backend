@@ -50,6 +50,12 @@ pub enum IPCError {
     JsonError(json_parser::JsonError),
 }
 
+impl From<json_parser::JsonError> for IPCError {
+    fn from(e: json_parser::JsonError) -> IPCError {
+        return IPCError::JsonError(e);
+    }
+}
+
 struct IPCFormat {
     payload_len: u32,
     payload_type: u32,
@@ -57,6 +63,11 @@ struct IPCFormat {
 }
 
 const MAGIC_STR: &str = "i3-ipc";
+
+enum WorkspaceEvent_T {
+    Focused,
+    Initialized,
+}
 
 fn connect() -> Result<UnixStream, IPCError> {
     match env::var_os("SWAYSOCK") {
@@ -89,17 +100,30 @@ pub fn run_ipc() -> Result<(), IPCError> {
     let workspace_thread = thread::spawn(move || {
         println!("created new thread");
         loop {
+            println!("loopstart");
             let fd_borrow = Arc::clone(&fd);
             send(fd_borrow, &workspace_msg);
             let fd_borrow_2 = Arc::clone(&fd);
-            let num_workspaces = match recv(fd_borrow_2) {
-                Ok(json) => match json {
-                    json_parser::JsonEntry::Array(jsarr) => jsarr.len(),
-                    _ => 0 as usize,
-                },
-                Err(e) => 0,
-            };
-            println!("{}", num_workspaces);
+            if let Ok(json_string) = recv(fd_borrow_2) {
+                match json_string.as_str() {
+                    "{\"success\": true}" => {
+                        println!("subscribed!");
+                        // TODO handle this?
+                        if let Ok(json_event_string) = recv(Arc::clone(&fd)) {
+                            ws_event_handler(Arc::clone(&fd), json_event_string.as_str());
+                        }
+                    }
+                    "{\"success\": false}" => panic!("RUH ROH FAILED OT SUBSCRIPT"), // TODO handle
+                                                                                     // this better
+                    _ => {
+                        println!("event triggered");
+                        // TODO handle this
+                        if let Ok(json_event_string) = recv(Arc::clone(&fd)) {
+                            ws_event_handler(Arc::clone(&fd), json_event_string.as_str());
+                        }
+                    }
+                }
+            }
         }
     });
 
@@ -117,21 +141,21 @@ fn send(fd: Arc<Mutex<UnixStream>>, message: &IPCFormat) -> Result<(), IPCError>
     header.append(&mut payload);
 
     let mut fd = fd.lock().unwrap();
-    match fd.write(&header) {
+    match fd.write_all(&header) {
         Ok(_) => {} // TODO: should check the number of bytes written == to size of the message, if
         // not throw a new error.
         Err(e) => return Err(IPCError::WriteError(e)),
     }
 
-    match fd.shutdown(std::net::Shutdown::Write) {
-        Ok(_) => {} // TODO: same
-        Err(e) => return Err(IPCError::ShutdownError(e)),
-    }
+    //match fd.shutdown(std::net::Shutdown::Write) {
+    //    Ok(_) => {} // TODO: same
+    //    Err(e) => return Err(IPCError::ShutdownError(e)),
+    //}
 
     Ok(())
 }
 
-fn recv(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<json_parser::JsonEntry, IPCError> {
+fn recv(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<String, IPCError> {
     let mut fd = fd_mutex.lock().unwrap();
     let mut buf_header = [0u8; 14];
     fd.read_exact(&mut buf_header);
@@ -139,30 +163,67 @@ fn recv(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<json_parser::JsonEntry, IPCE
         u32::from_ne_bytes([buf_header[6], buf_header[7], buf_header[8], buf_header[9]]);
     let mut payload = vec![0u8; payload_size as usize];
     fd.read_exact(&mut payload);
-    let buf_string_json: String = String::from_utf8_lossy(&payload).into_owned();
-    match buf_string_json.as_str() {
-        "{\"success\": true}" => {
-            drop(fd);
-            Ok(recv(Arc::clone(&fd_mutex))?)
+    Ok(String::from_utf8_lossy(&payload).into_owned())
+}
+
+fn ws_event_handler(fd_mutex: Arc<Mutex<UnixStream>>, json_str: &str) -> Result<(), IPCError> {
+    match client_state_mux(json_str) {
+        Ok(WorkspaceEvent_T::Focused) => {
+            ws_focus_handler(Arc::clone(&fd_mutex));
         }
-        "{\"success\": false}" => Err(IPCError::GeneralError),
-        _ => {
-            let mut payload = MAGIC_STR.as_bytes().to_vec();
-            payload.append(&mut [0u8; 4].to_vec());
-            payload.append(&mut (IPCMessages::GetWorkspaces as usize).to_ne_bytes().to_vec());
-            fd.write(&mut payload);
-            fd.shutdown(std::net::Shutdown::Write);
-            let mut buf_header = [0u8; 14];
-            fd.read_exact(&mut buf_header);
-            let payload_size: u32 =
-                u32::from_ne_bytes([buf_header[6], buf_header[7], buf_header[8], buf_header[9]]);
-            let mut payload = vec![0u8; payload_size as usize];
-            fd.read_exact(&mut payload);
-            let buf_string_json: String = String::from_utf8_lossy(&payload).into_owned();
-            match json_parser::stojson(Rc::new(RefCell::new(buf_string_json))) {
-                Ok(json) => Ok(json),
-                Err(e) => Err(IPCError::JsonError(e)),
+        Ok(WorkspaceEvent_T::Initialized) => {
+            // TODO handle
+            if let Ok(focus_json_str) = recv(Arc::clone(&fd_mutex)) {
+                ws_event_handler(Arc::clone(&fd_mutex), &focus_json_str.as_str());
             }
         }
+        Err(e) => return Err(e),
     }
+
+    Ok(())
+}
+
+fn ws_focus_handler(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<(), IPCError> {
+    let mut fd = fd_mutex.lock().unwrap();
+    let mut payload = MAGIC_STR.as_bytes().to_vec();
+    payload.append(&mut [0u8; 4].to_vec());
+    payload.append(&mut (IPCMessages::GetWorkspaces as u32).to_ne_bytes().to_vec());
+    println!("sending: {:?}", payload);
+    if let Err(e) = fd.write_all(&mut payload) {
+        println!("1: {e}");
+    }
+    //if let Err(e) = fd.shutdown(std::net::Shutdown::Write) {
+    //    println!("2: {e}");
+    //}
+    let mut buf_header = [0u8; 14];
+    if let Err(e) = fd.read_exact(&mut buf_header) {
+        println!("3: {e}");
+    }
+    let payload_size: u32 =
+        u32::from_ne_bytes([buf_header[6], buf_header[7], buf_header[8], buf_header[9]]);
+    let mut payload = vec![0u8; payload_size as usize];
+    fd.read_exact(&mut payload);
+    let buf_string_json: String = String::from_utf8_lossy(&payload).into_owned();
+    println!("{}", buf_string_json);
+    if let Ok(json_parser::JsonEntry::Array(workspace_json)) = json_parser::stojson(Rc::new(RefCell::new(buf_string_json))) {
+        println!("Workspaces: {}", workspace_json.len());
+    }
+
+    Ok(())
+}
+
+fn client_state_mux(ipc_message: &str) -> Result<WorkspaceEvent_T, IPCError> {
+    let match_key: &str = "{ \"change\": ";
+    return match &ipc_message[0..12] {
+        match_key => {
+            if &ipc_message[13..18] == "focus" {
+                return Ok(WorkspaceEvent_T::Focused);
+            } else if &ipc_message [13..17] == "init" {
+                return Ok(WorkspaceEvent_T::Initialized);
+            } else {
+                return Err(IPCError::GeneralError);
+            }
+        }
+        _ => Err(IPCError::GeneralError),
+   }
 }
