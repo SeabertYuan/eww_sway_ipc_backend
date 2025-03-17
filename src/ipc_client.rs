@@ -137,8 +137,29 @@ pub fn run_ipc() -> Result<(), IPCError> {
                         };
                         send(Arc::clone(&fd_mutex), &message);
                         let workspace_data = recv(Arc::clone(&fd_mutex)).unwrap();
-                        // TODO use this thread to manipulate the data.
-                        ws_tx.send(workspace_data).unwrap();
+                        // EWW can use json lists ["a", "b", ... ]
+                        let mut result = String::from("[");
+                        if let Ok(json_parser::JsonEntry::Array(workspace_json)) = json_parser::stojson(Rc::new(RefCell::new(workspace_data))) {
+                            for workspace in workspace_json.iter() {
+                                if let json_parser::JsonEntry::Object(workspace_obj) = workspace {
+                                    let mut ws_res = String::from("\"");
+                                    if let json_parser::JsonValue::String(name) = &workspace_obj[13].value {
+                                        ws_res.push_str(&name);
+                                    }
+                                    if let json_parser::JsonValue::Boolean(focused) = workspace_obj[25].value {
+                                        if focused {
+                                            ws_res.push_str("focused");
+                                        }
+                                    }
+                                    ws_res.push_str("\"");
+                                    result.push_str(&ws_res);
+                                    result.push(',');
+                                }
+                            }
+                            result.pop();
+                            result.push(']');
+                            ws_tx.send(result).unwrap();
+                        }
                     }
                     _ => continue,
                 }
@@ -213,9 +234,8 @@ fn ws_focus_handler(fd_mutex: Arc<Mutex<UnixStream>>, tx: &mpsc::Sender<IPCMessa
     tx.send(IPCMessages::GetWorkspaces).unwrap();
     let buf_string_json: String = ws_rx.recv().unwrap();
     //println!("{}", buf_string_json);
-    if let Ok(json_parser::JsonEntry::Array(workspace_json)) = json_parser::stojson(Rc::new(RefCell::new(buf_string_json))) {
-        println!("Workspaces: {}", workspace_json.len());
-    }
+    // TODO buf_string_json will probably be the result to print.
+    println!("{}", buf_string_json);
     Ok(())
 }
 
