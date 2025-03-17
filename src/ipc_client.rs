@@ -65,7 +65,7 @@ struct IPCFormat {
 
 const MAGIC_STR: &str = "i3-ipc";
 
-enum WorkspaceEvent_T {
+enum WorkspaceEventT {
     Focused,
     Initialized,
     Empty,
@@ -194,10 +194,10 @@ fn recv(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<String, IPCError> {
 
 fn ws_event_handler(fd_mutex: Arc<Mutex<UnixStream>>, json_str: &str) -> Result<(), IPCError> {
     match client_state_mux(json_str) {
-        Ok(WorkspaceEvent_T::Focused) => {
+        Ok(WorkspaceEventT::Focused) => {
             ws_focus_handler(Arc::clone(&fd_mutex));
         }
-        Ok(WorkspaceEvent_T::Initialized) | Ok(WorkspaceEvent_T::Empty) => {
+        Ok(WorkspaceEventT::Initialized) | Ok(WorkspaceEventT::Empty) => {
             // TODO handle
             if let Ok(focus_json_str) = recv(Arc::clone(&fd_mutex)) {
                 ws_event_handler(Arc::clone(&fd_mutex), &focus_json_str.as_str());
@@ -211,25 +211,13 @@ fn ws_event_handler(fd_mutex: Arc<Mutex<UnixStream>>, json_str: &str) -> Result<
 
 fn ws_focus_handler(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<(), IPCError> {
     let mut fd = fd_mutex.lock().unwrap();
-    let mut payload = MAGIC_STR.as_bytes().to_vec();
-    payload.append(&mut [0u8; 4].to_vec());
-    payload.append(&mut (IPCMessages::GetWorkspaces as u32).to_ne_bytes().to_vec());
-    println!("sending: {:?}", payload);
-    if let Err(e) = fd.write_all(&mut payload) {
-        println!("1: {e}");
-    }
-    //if let Err(e) = fd.shutdown(std::net::Shutdown::Write) {
-    //    println!("2: {e}");
-    //}
-    let mut buf_header = [0u8; 14];
-    if let Err(e) = fd.read_exact(&mut buf_header) {
-        println!("3: {e}");
-    }
-    let payload_size: u32 =
-        u32::from_ne_bytes([buf_header[6], buf_header[7], buf_header[8], buf_header[9]]);
-    let mut payload = vec![0u8; payload_size as usize];
-    fd.read_exact(&mut payload);
-    let buf_string_json: String = String::from_utf8_lossy(&payload).into_owned();
+    let message = IPCFormat {
+                        payload_len: 0,
+                        payload_type: IPCMessages::GetWorkspaces as u32,
+                        payload: String::from(""),
+                    };
+    send(Arc::clone(&fd), message);
+    let buf_string_json: String = recv(Arc::clone(&fd))?;
     println!("{}", buf_string_json);
     if let Ok(json_parser::JsonEntry::Array(workspace_json)) = json_parser::stojson(Rc::new(RefCell::new(buf_string_json))) {
         println!("Workspaces: {}", workspace_json.len());
@@ -238,16 +226,16 @@ fn ws_focus_handler(fd_mutex: Arc<Mutex<UnixStream>>) -> Result<(), IPCError> {
     Ok(())
 }
 
-fn client_state_mux(ipc_message: &str) -> Result<WorkspaceEvent_T, IPCError> {
+fn client_state_mux(ipc_message: &str) -> Result<WorkspaceEventT, IPCError> {
     let match_key: &str = "{ \"change\": ";
     return match &ipc_message[0..12] {
         match_key => {
             if &ipc_message[13..18] == "focus" {
-                return Ok(WorkspaceEvent_T::Focused);
+                return Ok(WorkspaceEventT::Focused);
             } else if &ipc_message [13..17] == "init" {
-                return Ok(WorkspaceEvent_T::Initialized);
+                return Ok(WorkspaceEventT::Initialized);
             } else if &ipc_message [13..18] == "empty" {
-                return Ok(WorkspaceEvent_T::Empty);
+                return Ok(WorkspaceEventT::Empty);
             } else {
                 return Err(IPCError::GeneralError);
             }
