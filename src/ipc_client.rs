@@ -71,7 +71,7 @@ enum WorkspaceEventT {
     Empty,
 }
 
-fn connect() -> Result<UnixStream, IPCError> {
+pub fn connect() -> Result<UnixStream, IPCError> {
     match env::var_os("SWAYSOCK") {
         Some(opt) => {
             // connect
@@ -130,36 +130,8 @@ pub fn run_ipc() -> Result<(), IPCError> {
                 let job = rx.recv().unwrap();
                 match job {
                     IPCMessages::GetWorkspaces => {
-                        let message = IPCFormat {
-                            payload_len: 0,
-                            payload_type: IPCMessages::GetWorkspaces as u32,
-                            payload: String::from(""),
-                        };
-                        send(Arc::clone(&fd_mutex), &message);
-                        let workspace_data = recv(Arc::clone(&fd_mutex)).unwrap();
-                        // EWW can use json lists ["a", "b", ... ]
-                        let mut result = String::from("[");
-                        if let Ok(json_parser::JsonEntry::Array(workspace_json)) = json_parser::stojson(Rc::new(RefCell::new(workspace_data))) {
-                            for workspace in workspace_json.iter() {
-                                if let json_parser::JsonEntry::Object(workspace_obj) = workspace {
-                                    let mut ws_res = String::from("\"");
-                                    if let json_parser::JsonValue::String(name) = &workspace_obj[13].value {
-                                        ws_res.push_str(&name);
-                                    }
-                                    if let json_parser::JsonValue::Boolean(focused) = workspace_obj[25].value {
-                                        if focused {
-                                            ws_res.push_str("focused");
-                                        }
-                                    }
-                                    ws_res.push_str("\"");
-                                    result.push_str(&ws_res);
-                                    result.push(',');
-                                }
-                            }
-                            result.pop();
-                            result.push(']');
+                            let result = get_workspaces_summary(Arc::clone(&fd_mutex));
                             ws_tx.send(result).unwrap();
-                        }
                     }
                     _ => continue,
                 }
@@ -174,6 +146,40 @@ pub fn run_ipc() -> Result<(), IPCError> {
 
     //println!("done");
     Ok(())
+}
+
+// Should make this a "result"
+pub fn get_workspaces_summary(fd_mutex: Arc<Mutex<UnixStream>>) -> String {
+    let message = IPCFormat {
+        payload_len: 0,
+        payload_type: IPCMessages::GetWorkspaces as u32,
+        payload: String::from(""),
+    };
+    send(Arc::clone(&fd_mutex), &message);
+    let workspace_data = recv(Arc::clone(&fd_mutex)).unwrap();
+    // EWW can use json lists ["a", "b", ... ]
+    let mut result = String::from("[");
+    if let Ok(json_parser::JsonEntry::Array(workspace_json)) = json_parser::stojson(Rc::new(RefCell::new(workspace_data))) {
+        for workspace in workspace_json.iter() {
+            if let json_parser::JsonEntry::Object(workspace_obj) = workspace {
+                let mut ws_res = String::from("\"");
+                if let json_parser::JsonValue::String(name) = &workspace_obj[13].value {
+                    ws_res.push_str(&name);
+                }
+                if let json_parser::JsonValue::Boolean(focused) = workspace_obj[25].value {
+                    if focused {
+                        ws_res.push_str("focused");
+                    }
+                }
+                ws_res.push_str("\"");
+                result.push_str(&ws_res);
+                result.push(',');
+            }
+        }
+        result.pop();
+        result.push(']');
+    }
+    result
 }
 
 fn send(fd: Arc<Mutex<UnixStream>>, message: &IPCFormat) -> Result<(), IPCError> {

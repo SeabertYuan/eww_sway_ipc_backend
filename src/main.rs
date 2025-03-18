@@ -8,6 +8,7 @@ use std::thread;
 use eww_sway_ipc_backend::*;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    crate::run();
+    let args: Vec<String> = env::args().collect();
+    crate::run(&args);
     Ok(())
 }

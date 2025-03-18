@@ -1,9 +1,21 @@
+use std::sync::{Arc, Mutex};
+
 pub mod ipc_client;
 pub mod json_parser;
 
-pub fn run() {
-    ipc_client::run_ipc();
-    println!("ran");
+pub fn run(args: &Vec<String>) {
+    if args.len() < 2 {
+        ipc_client::run_ipc();
+    }
+    match args[1].as_str() {
+        "get-workspaces" => {
+            let fd = ipc_client::connect().unwrap();
+            let fd_mutex = Arc::new(Mutex::new(fd));
+            let workspace_config = ipc_client::get_workspaces_summary(Arc::clone(&fd_mutex));
+            println!("{}", workspace_config);
+        }
+        _ => {}
+    }
 }
 
 pub fn split_workspaces(ipc_output: &str) -> Vec<String> {
